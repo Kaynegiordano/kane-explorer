@@ -1,15 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5B8CFF"/>
-      <stop offset="1" stop-color="#3A4FD8"/>
+    <linearGradient id="back" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F2B33D"/>
+      <stop offset="1" stop-color="#E29A1F"/>
     </linearGradient>
-    <linearGradient id="fd" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFD873"/>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFDA7A"/>
       <stop offset="1" stop-color="#FFB547"/>
     </linearGradient>
   </defs>
-  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)"/>
-  <path d="M220 330a50 50 0 0 1 50-50h170l60 60h254a50 50 0 0 1 50 50v334a50 50 0 0 1-50 50H270a50 50 0 0 1-50-50z" fill="url(#fd)"/>
-  <path d="M440 440v260M440 580l130-140M480 545l100 155" stroke="#3A4FD8" stroke-width="56" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Dossier : arrière avec onglet -->
+  <path d="M48 232a72 72 0 0 1 72-72h236c24 0 46 10 61 28l50 60h437a72 72 0 0 1 72 72v512a72 72 0 0 1-72 72H120a72 72 0 0 1-72-72z" fill="url(#back)"/>
+  <!-- Dossier : face avant -->
+  <path d="M48 368a72 72 0 0 1 72-72h784a72 72 0 0 1 72 72v464a72 72 0 0 1-72 72H120a72 72 0 0 1-72-72z" fill="url(#front)"/>
+  <!-- Lettre K -->
+  <path d="M404 436v332M404 620l218-184M478 562l154 206" stroke="#3A4FD8" stroke-width="100" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>
