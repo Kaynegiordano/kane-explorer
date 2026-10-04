@@ -1,0 +1,156 @@
+/* ================= Fonctions créatives (features.js) ================= */
+
+.menu { z-index: 40; }
+.toasts { z-index: 50; }
+.status-extra { margin-left: auto; display: flex; gap: 6px; }
+
+/* Badges (Git, projets) et étiquettes de couleur */
+.badge {
+  font-style: normal; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 9px; white-space: nowrap;
+  background: var(--bg); border: 1px solid var(--border); color: var(--muted); flex: none;
+}
+.badge.git { color: #16a34a; border-color: color-mix(in srgb, #16a34a 35%, transparent); }
+.badge.we { color: #a855f7; border-color: color-mix(in srgb, #a855f7 35%, transparent); }
+.row .name .badge { margin-left: 2px; }
+.tag-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; flex: none; margin-right: 6px; vertical-align: 1px; }
+.tag-dot.big { width: 11px; height: 11px; margin-right: 2px; }
+.row .name .tag-dot { margin-right: -4px; }
+
+/* OneDrive : état de synchronisation */
+.cloud-ico { width: 14px; height: 14px; flex: none; margin: 0 2px; vertical-align: -2px; stroke: none; }
+.tile .label .cloud-ico { width: 12px; height: 12px; }
+.pv-info .cloud-ico { vertical-align: -3px; margin-right: 4px; }
+
+/* Glisser-déposer : barre des autres fenêtres et étiquette près du curseur */
+.drag-bar {
+  position: fixed; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 45;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; max-width: calc(100vw - 40px); overflow-x: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+  animation: in .15s ease-out;
+}
+.drag-bar[hidden] { display: none; }
+.drag-bar-title { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+.drag-chip {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 8px; white-space: nowrap;
+  border: 1px dashed var(--border); background: var(--bg); font-weight: 600;
+}
+.drag-chip .ficon { width: 20px; height: 20px; }
+.drag-chip.hover { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent); }
+.drop-hint {
+  position: fixed; z-index: 60; pointer-events: none; display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 10px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 12.5px;
+  box-shadow: var(--shadow); max-width: 260px;
+}
+.drop-hint[hidden] { display: none; }
+.drop-hint small { opacity: .8; font-size: 11px; }
+.drop-hint.muted { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+
+/* Accueil : carte sélectionnée (un clic), ouverte au double-clic */
+.card.sel { border-color: var(--accent); background: var(--accent-soft); }
+
+/* Survol vidéo dans la grille */
+.tile { position: relative; }
+.tile video.thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: #000; }
+.tile[style*="--scrub"]::after {
+  content: ""; position: absolute; left: 10px; right: 10px; top: 76px; height: 3px; border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--scrub), var(--border) var(--scrub));
+}
+
+/* Barre latérale : mise à jour disponible */
+.update-btn { margin: 0 8px 4px; width: auto; color: #fff; background: var(--accent); font-weight: 600; }
+.update-btn:hover { background: var(--accent); filter: brightness(1.08); }
+
+/* Barre latérale : réseau */
+.net-btn { margin: 0 8px 2px; width: auto; align-items: center; }
+.net-btn .net-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; flex: 1; }
+.net-btn small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.net-btn .net-swap { width: 14px; height: 14px; color: var(--muted); }
+
+/* Aperçu : génération IA */
+.pv-ai { margin: 0 16px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.pv-ai-head { font-weight: 600; margin-bottom: 8px; }
+.pv-ai-head span { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 4px; }
+.pv-ai-label { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin: 6px 0 4px; }
+.pv-ai-label button { color: var(--accent); font-size: 12px; }
+.pv-ai-text {
+  margin: 0; padding: 8px 10px; max-height: 160px; overflow: auto; border-radius: 6px; background: var(--panel);
+  font: 12px/1.45 "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; user-select: text;
+}
+.pv-ai-text.neg { color: var(--muted); max-height: 90px; }
+.pv-ai .pv-info { margin: 10px 0 0; }
+.pv-ai .pv-actions { padding: 10px 0 0; }
+
+/* Visionneuse et comparaison */
+.viewer {
+  position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+  background: rgba(8, 9, 12, .96); color: #eef0f5;
+}
+.viewer[hidden] { display: none; }
+.vw-top { display: flex; align-items: center; gap: 8px; padding: 10px 14px; }
+.vw-top button { height: 30px; padding: 0 12px; border-radius: 6px; background: rgba(255, 255, 255, .08); }
+.vw-top button:hover { background: rgba(255, 255, 255, .16); }
+.vw-top button.on { background: var(--accent); }
+.vw-top button.danger:hover { background: var(--danger); }
+.vw-title { font-weight: 600; }
+.vw-count { color: #9aa0ad; }
+.vw-main { flex: 1; display: flex; min-height: 0; position: relative; }
+.vw-stage { flex: 1; display: grid; place-items: center; min-width: 0; padding: 0 56px; }
+.vw-stage img, .vw-stage video { max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
+.vw-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; font-size: 34px; border-radius: 8px; color: #fff; opacity: .5; z-index: 1; }
+.vw-nav:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
+.vw-nav.prev { left: 6px; }
+.vw-nav.next { right: 6px; }
+.vw-main:has(.vw-info:not([hidden])) .vw-nav.next { right: 366px; }
+.vw-info { width: 360px; flex: none; overflow-y: auto; padding: 6px 4px 20px; background: rgba(255, 255, 255, .04); }
+.viewer .vw-info { color: #eef0f5; --text: #eef0f5; --muted: #9aa0ad; --bg: rgba(255, 255, 255, .05); --panel: rgba(0, 0, 0, .35); --border: rgba(255, 255, 255, .12); }
+.viewer .vw-info > .pv-info { margin: 12px 16px; }
+.vw-help { text-align: center; color: #8a909c; font-size: 12px; padding: 8px; }
+.vw-compare { flex: 1; display: grid; gap: 10px; padding: 0 14px 14px; min-height: 0; }
+.vw-compare figure { margin: 0; display: flex; flex-direction: column; min-height: 0; background: rgba(255, 255, 255, .04); border-radius: 10px; overflow: hidden; }
+.vw-compare figure.gone { opacity: .25; }
+.cmp-img { flex: 1; display: grid; place-items: center; min-height: 0; }
+.cmp-img img { max-width: 100%; max-height: calc(100vh - 220px); object-fit: contain; }
+.vw-compare figcaption { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.cmp-meta { color: #a3a9b6; font-size: 12px; line-height: 1.5; }
+.cmp-actions { display: flex; gap: 6px; }
+.cmp-actions button { height: 28px; padding: 0 10px; border-radius: 6px; background: rgba(255, 255, 255, .08); }
+.cmp-actions button.danger:hover { background: var(--danger); }
+
+/* Fenêtres larges : analyse disque, doublons, renommage */
+.modal.wide { width: min(900px, calc(100vw - 32px)); }
+.modal .cmd { padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); font: 13px Consolas, monospace; user-select: text; }
+.spinner { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); display: inline-block; animation: spin .8s linear infinite; vertical-align: -3px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.du-loading { display: flex; align-items: center; gap: 10px; padding: 30px 0; color: var(--muted); }
+.du-path { display: flex; align-items: center; gap: 10px; margin: 8px 0 12px; color: var(--muted); word-break: break-all; }
+.du-sum { margin-bottom: 8px; color: var(--muted); }
+.du-list { max-height: 55vh; overflow-y: auto; border-top: 1px solid var(--border); }
+.du-row {
+  display: grid; grid-template-columns: minmax(160px, 1.3fr) 1fr 90px 64px; gap: 12px; align-items: center;
+  padding: 6px 8px; border-bottom: 1px solid var(--border); cursor: default;
+}
+.du-row.dir { cursor: pointer; }
+.du-row:hover { background: var(--hover); }
+.du-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.du-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.du-name .ficon { width: 20px; height: 20px; }
+.du-bar { height: 8px; border-radius: 4px; background: var(--bg); overflow: hidden; }
+.du-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #a855f7); border-radius: 4px; }
+.du-size, .du-pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dup-body { max-height: 55vh; overflow-y: auto; }
+.dup-group { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.dup-head { padding: 6px 10px; background: var(--bg); font-weight: 600; font-size: 12.5px; }
+.dup-file { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-top: 1px solid var(--border); }
+.dup-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; cursor: pointer; }
+.dup-path:hover { color: var(--accent); text-decoration: underline; }
+.dup-date { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.br-grid { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 10px; clear: both; }
+.br-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.modal input[type=number] { height: 30px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; width: 100%; }
+.br-preview { max-height: 34vh; overflow-y: auto; margin: 10px 0; border: 1px solid var(--border); border-radius: 8px; }
+.br-row { display: grid; grid-template-columns: 1fr 20px 1fr; gap: 8px; padding: 4px 10px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+.br-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.br-row span:last-child { font-weight: 600; }
+.br-row.same { opacity: .5; }
+.br-row.bad span:last-child { color: var(--danger); }
+.btn:disabled { opacity: .45; cursor: default; }
