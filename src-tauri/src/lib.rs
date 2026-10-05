@@ -20,7 +20,11 @@ struct Entry {
     modified: u64,
     created: u64,
     hidden: bool,
+    /// Fichier protégé du système (caché + système), masqué même avec « éléments masqués »
+    protected: bool,
     attrs: u32,
+    /// Nom affiché par l'Explorateur s'il diffère du nom réel (dossiers traduits)
+    display: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -60,12 +64,16 @@ fn millis(t: std::io::Result<SystemTime>) -> u64 {
         .unwrap_or(0)
 }
 
+const ATTR_READONLY: u32 = 0x1;
+const ATTR_HIDDEN: u32 = 0x2;
+const ATTR_SYSTEM: u32 = 0x4;
+
+/// Comme l'Explorateur : seul l'attribut « caché » masque un élément
+/// (un élément simplement « système » reste visible).
 #[cfg(windows)]
 fn is_hidden(meta: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
-    const HIDDEN: u32 = 0x2;
-    const SYSTEM: u32 = 0x4;
-    meta.file_attributes() & (HIDDEN | SYSTEM) != 0
+    meta.file_attributes() & ATTR_HIDDEN != 0
 }
 
 #[cfg(not(windows))]
@@ -101,6 +109,13 @@ async fn list_dir(path: String) -> Result<Vec<Entry>, String> {
             }
         }
         let is_dir = meta.is_dir();
+        // Dossiers personnalisés (desktop.ini) : nom traduit affiché par l'Explorateur,
+        // ex. « Screenshots » -> « Captures d'écran », « Camera Roll » -> « Pellicule »
+        let mut display = None;
+        #[cfg(windows)]
+        if is_dir && attrs & (ATTR_READONLY | ATTR_SYSTEM) != 0 && e.path().join("desktop.ini").exists() {
+            display = win::display_name(&e.path().to_string_lossy()).filter(|d| *d != e.file_name().to_string_lossy());
+        }
         out.push(Entry {
             name: e.file_name().to_string_lossy().into_owned(),
             path: e.path().to_string_lossy().into_owned(),
@@ -109,7 +124,9 @@ async fn list_dir(path: String) -> Result<Vec<Entry>, String> {
             modified: millis(meta.modified()),
             created: millis(meta.created()),
             hidden,
+            protected: attrs & (ATTR_HIDDEN | ATTR_SYSTEM) == (ATTR_HIDDEN | ATTR_SYSTEM),
             attrs,
+            display,
         });
     }
     Ok(out)
@@ -159,6 +176,7 @@ async fn places() -> Vec<Place> {
         ("Téléchargements", dirs::download_dir(), "downloads"),
         ("Documents", dirs::document_dir(), "documents"),
         ("Images", dirs::picture_dir(), "pictures"),
+        ("Captures d'écran", screenshots_dir(), "screenshots"),
         ("Musique", dirs::audio_dir(), "music"),
         ("Vidéos", dirs::video_dir(), "videos"),
         ("Dossier personnel", dirs::home_dir(), "home"),
@@ -172,6 +190,14 @@ async fn places() -> Vec<Place> {
         })
     }));
     out
+}
+
+/// Dossier des captures d'écran de Windows (Win + Impr. écran, Outil Capture).
+fn screenshots_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    return win::known_folder_screenshots();
+    #[cfg(not(windows))]
+    None
 }
 
 /// OneDrive : « Toujours conserver sur cet appareil » (keep) ou « Libérer de l'espace ».

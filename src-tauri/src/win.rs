@@ -711,6 +711,38 @@ pub fn network_signature() -> String {
     }
 }
 
+/* ----- Noms affichés et dossiers connus ----- */
+
+/// Nom affiché par l'Explorateur (traduction via desktop.ini, ex. « Captures d'écran »).
+pub fn display_name(path: &str) -> Option<String> {
+    let mut info = SHFILEINFOW::default();
+    let ok = unsafe {
+        SHGetFileInfoW(
+            &HSTRING::from(path),
+            Default::default(),
+            Some(&mut info),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_DISPLAYNAME,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let n = info.szDisplayName.iter().position(|&c| c == 0).unwrap_or(0);
+    (n > 0).then(|| String::from_utf16_lossy(&info.szDisplayName[..n]))
+}
+
+/// Emplacement réel du dossier « Captures d'écran » (peut être dans OneDrive).
+pub fn known_folder_screenshots() -> Option<std::path::PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_Screenshots, KNOWN_FOLDER_FLAG(0), None).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s.map(std::path::PathBuf::from)
+    }
+}
+
 /* ----- Registre de l'utilisateur (HKCU) ----- */
 
 /// Écrit une valeur texte (`name` = None : valeur par défaut de la clé), en créant la clé si besoin.
@@ -812,5 +844,13 @@ mod tests {
         assert_eq!(super::reg_get(key, Some("DelegateExecute")).as_deref(), Some(""));
         super::reg_delete_tree(r"Software\KaneRegTest");
         assert!(super::reg_get(key, None).is_none());
+    }
+    /// Noms traduits par Windows et dossier « Captures d'écran » (lecture seule).
+    #[test]
+    fn noms_traduits() {
+        let shots = super::known_folder_screenshots().expect("dossier Captures d'écran");
+        let name = super::display_name(&shots.to_string_lossy()).unwrap_or_default();
+        println!("dossier : {} -> affiché : {}", shots.display(), name);
+        assert!(!name.is_empty());
     }
 }

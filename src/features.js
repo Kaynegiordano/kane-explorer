@@ -246,7 +246,7 @@ function parseFilter(raw) {
 }
 
 function matchFilter(e, f) {
-  if (f.mode === 'name') return !f.q || e.lname.includes(f.q) || (weOf(e)?.title || '').toLowerCase().includes(f.q);
+  if (f.mode === 'name') return !f.q || e.lname.includes(f.q) || e.name.toLowerCase().includes(f.q) || (weOf(e)?.title || '').toLowerCase().includes(f.q);
   if (f.mode === 'tag') { const t = tagOf(e); return !!t && t.startsWith(f.q); }
   if (!tab.prompts) { loadPrompts(tab); return false; }
   const p = tab.prompts[e.path];
@@ -1023,14 +1023,17 @@ function renderNetwork() {
   const btn = $('net-btn');
   const { active } = netState();
   const up = netAdapters.filter((a) => a.status === 'Up');
-  btn.hidden = !netAdapters.length;
+  btn.hidden = false; // toujours visible, même si aucune carte n'est détectée
   btn.innerHTML = `${NET_ICONS[active || 'off']}<span class="net-text"><span>${up.length ? esc(up.map(adapterKind).filter((k, i, l) => l.indexOf(k) === i).join(' + ')) : 'Hors ligne'}</span>` +
-    `<small>${esc(up.map((a) => a.name).join(', ') || 'Cliquer pour basculer')}</small></span><svg class="net-swap" viewBox="0 0 24 24"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg>`;
+    `<small>${esc(up.map((a) => a.name).join(', ') || (netAdapters.length ? 'Cliquer pour basculer' : 'Lecture des cartes…'))}</small></span><svg class="net-swap" viewBox="0 0 24 24"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg>`;
   btn.title = netAdapters.map((a) => `${a.name} — ${a.description} (${adapterKind(a)}) : ${ADAPTER_STATUS[a.status] || a.status}`).join('\n');
 }
 
+let netRetry = 0;
 async function loadNetwork() {
-  netAdapters = await invoke('network_adapters').catch(() => []);
+  const list = await invoke('network_adapters').catch(() => null);
+  if (list && (list.length || !netAdapters.length)) netAdapters = list;
+  if (!list || !list.length) { clearTimeout(netRetry); netRetry = setTimeout(loadNetwork, 4000); }
   renderNetwork();
 }
 

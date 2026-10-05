@@ -33,6 +33,7 @@ const prefs = {
   sortDir: store.get('sortDir', 1),
   view: store.get('view', 'list'),
   showHidden: store.get('showHidden', false),
+  showProtected: store.get('showProtected', false),
   preview: store.get('preview', true),
   previewWidth: store.get('previewWidth', 340),
   // Options des dossiers (équivalents de l'Explorateur)
@@ -46,7 +47,7 @@ const prefs = {
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'double', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false,
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false,
 };
 
 // Fenêtre secondaire (ouverte via « nouvelle fenêtre ») : ne touche pas aux onglets mémorisés
@@ -146,7 +147,7 @@ function typeLabel(e) {
 // Pré-calcule une fois les clés utilisées par le tri et l'affichage
 function prepare(entries) {
   for (const e of entries) {
-    e.lname = e.name.toLowerCase();
+    e.lname = (e.display || e.name).toLowerCase();
     e.ext = e.is_dir ? '' : extOf(e.name);
     e.kind = e.is_dir ? 'dir' : (KIND_OF[e.ext] || 'other');
     e.type = typeLabel(e);
@@ -368,7 +369,7 @@ listen('dir-changed', (ev) => {
 
 function computeItems() {
   const flt = parseFilter(tab.filter);
-  const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && matchFilter(e, flt));
+  const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && (prefs.showProtected || !e.protected) && matchFilter(e, flt));
   const { sortKey: k, sortDir: d } = prefs;
   list.sort((a, b) => {
     if (prefs.foldersFirst && a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
@@ -376,7 +377,7 @@ function computeItems() {
     if (k === 'size') r = a.size - b.size;
     else if (k === 'modified') r = a.modified - b.modified;
     else if (k === 'type') r = collator.compare(a.type, b.type);
-    return (r || collator.compare(a.name, b.name)) * d;
+    return (r || collator.compare(a.display || a.name, b.display || b.name)) * d;
   });
   return list;
 }
@@ -654,6 +655,7 @@ const selectedPaths = () => [...tab.selected];
 
 /** Nom affiché : extension masquée si l'option est désactivée (comme l'Explorateur). */
 function displayName(e) {
+  if (e.display) return e.display; // nom traduit par Windows
   return !prefs.showExt && !e.is_dir && e.ext ? e.name.slice(0, -(e.ext.length + 1)) : e.name;
 }
 
@@ -1524,6 +1526,7 @@ function openOptions() {
     <fieldset><legend>Affichage</legend>
       ${check('showExt', 'Afficher les extensions des fichiers')}
       ${check('showHidden', 'Afficher les fichiers et dossiers masqués')}
+      ${check('showProtected', 'Afficher les fichiers protégés du système d\u2019exploitation')}
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
     </fieldset>
