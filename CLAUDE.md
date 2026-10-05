@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.1.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.1.2** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -147,6 +147,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js`. 
 | 1.0.3 | Noms traduits (« Captures d'écran »), raccourci Captures d'écran, règle des éléments cachés comme l'Explorateur, bouton réseau toujours visible, bouton de mise à jour vide corrigé |
 | 1.1.0 | Sélection par rectangle, rendu plus rapide, épinglés de tout type, accès rapide personnalisable, animations, outils (Étagère, Ranger, Nouveau fichier, ZIP, formats de chemin) |
 | 1.1.1 | Double-clic sur une image/vidéo = visionneuse de Kane (navigation sur le dossier), liste vide après un tri corrigée, glisser depuis la marge d'une tuile sélectionnée |
+| 1.1.2 | Correction de la sélection multiple « fantôme » après un clic sur le vide (rectangle de sélection resté en attente) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -163,6 +164,10 @@ la marge d'une tuile sélectionnée permet de glisser les fichiers (la marge d'u
 Banc d'essai du glisser sortant : script PowerShell `-STA` avec une fenêtre WinForms `AllowDrop` qui journalise
 `DragEnter/DragDrop`, et `SetCursorPos` + `mouse_event` pour un vrai glisser depuis la fenêtre de dev (la restaurer
 d'abord si elle est minimisée) : une cible externe reçoit FileDrop, Shell IDList Array, FileContents… (OK).
+
+**1.1.2** : correction de la sélection multiple « fantôme » : `lassoEnd` plantait (`lasso.el` nul) sur un
+simple clic dans le vide et laissait un rectangle en attente, qui se déclenchait au clic suivant. Désormais : `?.remove()`,
+fin du rectangle à chaque `pointerdown`, `pointerup` / `pointercancel` de la fenêtre et `blur`, seuil de 6 px (hypot).
 
 ## 8. Ce qui n'a pas été testé en conditions réelles
 

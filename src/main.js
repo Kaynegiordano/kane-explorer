@@ -1326,12 +1326,13 @@ function lassoTick() {
 function lassoEnd() {
   if (!lasso) return;
   cancelAnimationFrame(lasso.raf);
-  lasso.el.remove();
+  lasso.el?.remove(); // absent tant que le rectangle n'a pas démarré (simple clic sur le vide)
   if (lasso.active) { suppressClick = true; setTimeout(() => { suppressClick = false; }, 100); }
   lasso = null;
 }
 
 els.content.addEventListener('pointerdown', (ev) => {
+  lassoEnd(); // jamais de rectangle « fantôme » d'un appui précédent dont le relâchement a eu lieu ailleurs
   if (!lassoStartAllowed(ev)) return;
   dragStart = null; // pas de glisser-déposer de fichiers depuis le vide d'une tuile
   const vr = $('vbody').getBoundingClientRect();
@@ -1348,7 +1349,7 @@ els.content.addEventListener('pointermove', (ev) => {
   if (!(ev.buttons & 1)) { lassoEnd(); return; }
   l.px = ev.clientX; l.py = ev.clientY;
   if (!l.active) {
-    if (Math.abs(ev.clientX - l.x0) + Math.abs(ev.clientY - l.y0) < 5) return;
+    if (Math.hypot(ev.clientX - l.x0, ev.clientY - l.y0) < 6) return; // une main qui bouge un peu en cliquant n'est pas un rectangle
     l.active = true;
     l.el = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'lasso' }));
     els.content.setPointerCapture(l.id);
@@ -1359,6 +1360,10 @@ els.content.addEventListener('pointermove', (ev) => {
 els.content.addEventListener('pointerup', lassoEnd);
 els.content.addEventListener('pointercancel', lassoEnd);
 els.content.addEventListener('lostpointercapture', lassoEnd);
+// Relâchement n'importe où dans la fenêtre (barre latérale, hors du contenu...), perte de focus : on termine
+window.addEventListener('pointerup', lassoEnd, true);
+window.addEventListener('pointercancel', lassoEnd, true);
+window.addEventListener('blur', lassoEnd);
 
 // Arrivée : fichiers lâchés sur Kane (depuis Kane lui-même ou depuis l'extérieur)
 let dropEl = null;
