@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -57,7 +57,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src-tauri/src/extras.rs` | Métadonnées IA, projets/Git, Wallpaper Engine, analyse disque, doublons, renommage, ffmpeg, réseau |
 | `src-tauri/windows/` | Installateur : `hooks.nsh` (registre), `header.bmp` 150×57, `sidebar.bmp` 164×314 |
 | `scripts/release.ps1` | Compilation signée + `latest.json` + Release GitHub |
-| `app-icon.svg` | Logo source (dossier jaune + K bleu, fond transparent) → `npx tauri icon app-icon.svg` |
+| `app-icon.png` | Logo source 1024×1024 (dossier bleu + K turquoise, fond transparent) → `npx tauri icon app-icon.png` (supprimer ensuite `src-tauri/icons/android` et `ios`). `src/logo.png` = logo de la barre latérale ; `windows/header.bmp` et `sidebar.bmp` de l'installateur refaits avec ce logo (fond clair) |
 
 ### Liaisons main.js ↔ features.js
 `main.js` appelle des fonctions définies dans `features.js` (résolues à l'exécution) : `afterLoad`, `parseFilter`,
@@ -156,6 +156,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.1.1 | Double-clic sur une image/vidéo = visionneuse de Kane (navigation sur le dossier), liste vide après un tri corrigée, glisser depuis la marge d'une tuile sélectionnée |
 | 1.1.2 | Correction de la sélection multiple « fantôme » après un clic sur le vide (rectangle de sélection resté en attente) |
 | 1.2.0 | Palette Ctrl+K, recherche avancée et recherches enregistrées, notes en étoiles, colonnes personnalisables, sessions d'onglets, apparence, annuler Ctrl+Z, archives comme dossiers, ComfyUI retiré |
+| 1.2.1 | Nouveau logo (dossier bleu + K turquoise, créé par l'utilisateur) appliqué partout : icônes, barre latérale, installateur |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
