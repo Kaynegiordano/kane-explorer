@@ -45,10 +45,11 @@ const prefs = {
   foldersFirst: store.get('foldersFirst', true),
   confirmDelete: store.get('confirmDelete', false),
   animations: store.get('animations', true),
+  viewerOnOpen: store.get('viewerOnOpen', true),     // images / vidéos : visionneuse de Kane (navigation image par image)
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'double', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true,
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true,
 };
 
 // Fenêtre secondaire (ouverte via « nouvelle fenêtre ») : ne touche pas aux onglets mémorisés
@@ -425,6 +426,7 @@ function renderFiles() {
       </div><div class="vbody list" id="vbody"><div class="vwin" id="vwin"></div></div>`;
   }
   layoutWindow();
+  renderWindow(true); // sans cela, la liste reste vide jusqu'au prochain défilement (tri, type d'affichage...)
   // Petite animation d'entrée, seulement à l'affichage d'un dossier (pas au défilement)
   const vw = $('vwin');
   vw.classList.add('enter');
@@ -694,6 +696,12 @@ async function openEntry(e) {
     if (prefs.openFolders === 'window') return winCall('new_window', { path: e.path });
     return navigate(e.path);
   }
+  // Images et vidéos : visionneuse de Kane, avec ← → pour passer à la suivante dans le dossier
+  if (prefs.viewerOnOpen && isViewable(e)) {
+    const list = tab.items.filter(isViewable);
+    const i = list.findIndex((x) => x.path === e.path);
+    return i >= 0 ? openViewer(list, i) : openViewer([e], 0);
+  }
   try { await invoke('open_path', { path: e.path }); }
   catch (err) { toast(cleanError(err), 'error'); }
 }
@@ -707,7 +715,9 @@ function openCard(card) {
 function openSelection() {
   const sel = selectedEntries();
   if (sel.length === 1) return openEntry(sel[0]);
-  sel.filter((e) => !e.is_dir).forEach(openEntry);
+  const files = sel.filter((e) => !e.is_dir);
+  if (prefs.viewerOnOpen && files.length && files.every(isViewable)) openViewer(files, 0); // sélection d'images : visionneuse
+  else files.forEach(openEntry);
   sel.filter((e) => e.is_dir).forEach((e) => newTab(e.path, { activate: false }));
 }
 
@@ -1241,7 +1251,9 @@ function lassoStartAllowed(ev) {
   const t = ev.target;
   if (t.closest('.list-head, .rename-input')) return false;
   const it = t.closest('.item');
-  return !it || (it.classList.contains('tile') && t === it); // marge d'une tuile = vide
+  if (!it) return true;
+  // Marge d'une tuile = vide, sauf si la tuile est sélectionnée : on peut alors la saisir n'importe où pour glisser les fichiers
+  return it.classList.contains('tile') && t === it && !it.classList.contains('sel');
 }
 
 /** Indices des éléments touchés par le rectangle (x1,y1)-(x2,y2), en coordonnées locales à #vbody. */
@@ -1694,6 +1706,7 @@ function openOptions() {
       ${check('showHidden', 'Afficher les fichiers et dossiers masqués')}
       ${check('showProtected', 'Afficher les fichiers protégés du système d\u2019exploitation')}
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
+      ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
     </fieldset>

@@ -614,6 +614,7 @@ function openViewer(list, i) {
   viewerEl.innerHTML = `
     <div class="vw-top">
       <span class="vw-title"></span><span class="vw-count"></span><span class="grow"></span>
+      <button data-v="open" title="Ouvrir avec l’application par défaut (Entrée)">Ouvrir</button>
       <button data-v="info" title="Infos (I)">Infos</button>
       <button data-v="keep" title="Étiquette verte (G)">Garder</button>
       <button data-v="tag" title="Étiquette (1-6)">Étiquette</button>
@@ -621,7 +622,7 @@ function openViewer(list, i) {
       <button data-v="close" title="Fermer (Échap)">✕</button>
     </div>
     <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside></div>
-    <div class="vw-help">← → naviguer · G garder · 1-6 étiquettes · 0 retirer · Suppr Corbeille · I infos · Échap fermer</div>`;
+    <div class="vw-help">← → ou molette : image suivante · Entrée ouvrir · G garder · 1-6 étiquettes · 0 retirer · Suppr Corbeille · I infos · Échap fermer</div>`;
   showViewerItem();
 }
 
@@ -637,8 +638,7 @@ function showViewerItem() {
   viewerEl.querySelector('[data-v="info"]').classList.toggle('on', vw.info);
   if (vw.info) loadViewerInfo(e);
   // Précharge l'image suivante : navigation instantanée
-  const next = vw.list[vw.i + 1];
-  if (next && IMG_VIEW.has(next.ext)) new Image().src = convertFileSrc(next.path);
+  for (const n of [vw.list[vw.i + 1], vw.list[vw.i - 1]]) if (n && IMG_VIEW.has(n.ext)) new Image().src = convertFileSrc(n.path);
 }
 
 async function loadViewerInfo(e) {
@@ -717,6 +717,7 @@ viewerEl.addEventListener('click', async (ev) => {
     case 'close': closeViewer(); break;
     case 'prev': viewerGo(-1); break;
     case 'next': viewerGo(1); break;
+    case 'open': invoke('open_path', { path: vw.list[vw.i].path }).catch((err) => toast(cleanError(err), 'error')); break;
     case 'info': vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); break;
     case 'keep': viewerTag('vert', true); break;
     case 'tag': tagMenu([vw.list[vw.i].path]); break;
@@ -737,6 +738,17 @@ viewerEl.addEventListener('click', async (ev) => {
   }
 });
 
+// Molette : image précédente / suivante
+let vwWheel = 0;
+viewerEl.addEventListener('wheel', (ev) => {
+  if (!vw || vw.mode !== 'single' || ev.target.closest('.vw-info, video')) return;
+  ev.preventDefault();
+  const now = performance.now();
+  if (now - vwWheel < 90 || Math.abs(ev.deltaY) < 4) return;
+  vwWheel = now;
+  viewerGo(ev.deltaY > 0 ? 1 : -1);
+}, { passive: false });
+
 // Clavier de la visionneuse (prioritaire sur le reste de l'application)
 document.addEventListener('keydown', (ev) => {
   if (viewerEl.hidden || !vw) return;
@@ -747,6 +759,9 @@ document.addEventListener('keydown', (ev) => {
   if (vw.mode !== 'single') return;
   if (ev.key === 'ArrowRight' || ev.key === ' ') viewerGo(1);
   else if (ev.key === 'ArrowLeft') viewerGo(-1);
+  else if (ev.key === 'ArrowDown' || ev.key === 'PageDown') viewerGo(1);
+  else if (ev.key === 'ArrowUp' || ev.key === 'PageUp' || ev.key === 'Backspace') viewerGo(-1);
+  else if (ev.key === 'Enter') viewerEl.querySelector('[data-v="open"]')?.click();
   else if (ev.key === 'Home') viewerGo(-1e9);
   else if (ev.key === 'End') viewerGo(1e9);
   else if (ev.key === 'Delete') viewerTrash();
