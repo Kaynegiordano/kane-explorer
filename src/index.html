@@ -23,6 +23,8 @@
         <div id="nav-pinned"></div>
         <div class="nav-hint" id="pin-hint">Glissez ici un dossier ou un fichier pour l’épingler</div>
       </div>
+      <div class="nav-title" id="searches-title" hidden>Recherches</div>
+      <div id="nav-searches"></div>
       <div class="nav-title">Accès rapide</div>
       <div id="nav-places"></div>
       <div id="shelf-zone" data-shelf-zone>
@@ -77,6 +79,9 @@
       <label class="search">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
         <input id="search" placeholder="Rechercher dans ce dossier" spellcheck="false">
+        <button type="button" class="search-save" id="btn-save-search" title="Enregistrer cette recherche dans la barre latérale" hidden>
+          <svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+        </button>
       </label>
     </header>
 
@@ -150,5 +155,10 @@
   <script src="features.js"></script>
   <script src="pins.js"></script>
   <script src="tools.js"></script>
+  <script src="search.js"></script>
+  <script src="meta.js"></script>
+  <script src="palette.js"></script>
+  <script src="undo.js"></script>
+  <script src="archive.js"></script>
 </body>
 </html>

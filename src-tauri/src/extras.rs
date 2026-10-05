@@ -1,4 +1,4 @@
-//! Fonctions « créatives » : métadonnées IA (Forge / A1111 / ComfyUI), projets,
+//! Fonctions « créatives » : métadonnées IA (Forge / A1111), projets,
 //! Wallpaper Engine, Git, analyse de l'espace disque, doublons, renommage en lot, ffmpeg.
 
 use serde::Serialize;
@@ -41,7 +41,7 @@ pub fn cloud_only(m: &fs::Metadata) -> bool {
 
 /* ---------------- Métadonnées de génération IA ---------------- */
 
-/// Textes intégrés à une image : « parameters » (Forge / A1111), « prompt » / « workflow » (ComfyUI)...
+/// Textes intégrés à une image : « parameters » (Forge / A1111)...
 pub fn image_meta(path: &Path) -> Vec<(String, String)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let r = match ext.as_str() {
@@ -374,7 +374,14 @@ pub fn obs_folder() -> Option<PathBuf> {
         for line in ini.lines() {
             for key in ["RecFilePath=", "FilePath="] {
                 if let Some(v) = line.strip_prefix(key) {
-                    let p = PathBuf::from(v.trim());
+                    // OBS écrit parfois les antislashs doublés (C:\\Users\\...) : on les ramène à un seul (sauf le \\ d'un chemin réseau)
+                    let v = v.trim();
+                    let (head, tail) = if v.starts_with("\\\\") { v.split_at(2) } else { ("", v) };
+                    let mut tail = tail.to_string();
+                    while tail.contains("\\\\") {
+                        tail = tail.replace("\\\\", "\\");
+                    }
+                    let p = PathBuf::from(format!("{head}{tail}"));
                     if p.is_dir() {
                         return Some(p);
                     }
@@ -856,7 +863,7 @@ pub fn zip_paths(paths: &[String], zip_name: &str) -> Result<String, String> {
     let first = paths.first().ok_or("Rien à compresser")?;
     let parent = Path::new(first).parent().ok_or("Chemin invalide")?;
     let target = free_name(parent, zip_name);
-    let mut cmd = quiet("tar");
+    let mut cmd = crate::fsx::tar();
     cmd.args(["-a", "-c", "-f"]).arg(&target).arg("-C").arg(parent);
     for p in paths {
         let n = Path::new(p).file_name().ok_or("Chemin invalide")?;
@@ -880,7 +887,7 @@ pub fn unzip_here(archive: &str) -> Result<String, String> {
     let stem = arch.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into());
     let dest = free_name(parent, &stem);
     fs::create_dir(&dest).map_err(|e| e.to_string())?;
-    let out = quiet("tar").arg("-x").arg("-f").arg(arch).arg("-C").arg(&dest).output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
+    let out = crate::fsx::tar().arg("-x").arg("-f").arg(arch).arg("-C").arg(&dest).output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
     if !out.status.success() {
         let _ = fs::remove_dir(&dest);
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());

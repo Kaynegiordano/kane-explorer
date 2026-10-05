@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.1.2** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -45,6 +45,13 @@ Installateur NSIS ~2 Mo, en français.
 | `src/features.js` | Fonctions avancées, chargé **après** main.js (scripts classiques partageant la portée globale) |
 | `src/pins.js` | Épinglés (dossiers, fichiers, lecteurs ; glisser pour réordonner ; renommer), Accès rapide personnalisable (masquer, renommer, réordonner), boîte `promptDialog` |
 | `src/tools.js` | Outils : Étagère, Ranger (tri annulable), Nouveau fichier, ZIP/Extraire, « Copier le chemin sous forme de… » |
+| `src/search.js` | Syntaxe de recherche (`parseFilter` / `matchFilter`), recherches enregistrées (barre latérale, bouton signet) |
+| `src/meta.js` | Notes en étoiles (`kRatings`), colonnes personnalisables (`COLS`, `visibleColumns`, `--cols`), cache de métadonnées |
+| `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
+| `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoMoves`, `recordPaste`) |
+| `src/archive.js` | Archives comme dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`) |
+| `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
+| `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
 | `src-tauri/src/extras.rs` | Métadonnées IA, projets/Git, Wallpaper Engine, analyse disque, doublons, renommage, ffmpeg, réseau |
@@ -61,7 +68,7 @@ Installateur NSIS ~2 Mo, en français.
 (pour que features.js soit chargé). Pour modifier main.js en masse, utiliser de petits scripts Node
 (remplacements exacts) : c'est ce qui a été fait (voir §9).
 
-Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js`. `features.js` appelle `toolItemMenu` /
+Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js`. `features.js` appelle `toolItemMenu` /
 `toolBlankMenu` (tools.js) et `togglePins` / `pinMany` / `unpinFolder` (pins.js) ; `main.js` appelle `quickPlaces`,
 `quickItemHtml`, `homePinnedHtml`, `pinDropped`, `shelfDropped`, `PIN_ZONE`, `SHELF_ZONE`, `openQuickEditor`.
 
@@ -138,7 +145,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js`. 
 | 0.1 | Prototype : accueil, barre latérale, fil d'Ariane, liste/grille, recherche, actions de base, thème clair/sombre |
 | 0.2 | Onglets, volet d'aperçu, menu contextuel/Propriétés/Ouvrir avec Windows, presse-papiers partagé, virtualisation, actualisation auto (notify) |
 | 0.3 | Glisser-déposer, aperçu natif Office, miniatures Windows (HEIC/TIFF/PSD/vidéo), vraies icônes, Options des dossiers, nouvelles fenêtres |
-| 0.4 | Prompts IA (Forge/A1111/ComfyUI) + recherche `p:`, comparaison, visionneuse de tri, étiquettes, épinglés, analyse disque, doublons, renommage en lot, ffmpeg, Git/projets, Wallpaper Engine, OBS, fond d'écran, bascule réseau |
+| 0.4 | Prompts IA (Forge/A1111) + recherche `p:`, comparaison, visionneuse de tri, étiquettes, épinglés, analyse disque, doublons, renommage en lot, ffmpeg, Git/projets, Wallpaper Engine, OBS, fond d'écran, bascule réseau |
 | 0.5 | OneDrive (états, conserver/libérer), clics cohérents sur l'accueil, Corbeille/copie via IFileOperation |
 | 0.6 / 0.6.1 | Fenêtre de destination visible pendant un glisser (n'importe quel logiciel), barre « Déposer dans », Bureau |
 | 1.0.0 | Installateur propre en français, remplacement officiel de l'Explorateur (Win+E, dossiers), instance unique |
@@ -148,6 +155,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js`. 
 | 1.1.0 | Sélection par rectangle, rendu plus rapide, épinglés de tout type, accès rapide personnalisable, animations, outils (Étagère, Ranger, Nouveau fichier, ZIP, formats de chemin) |
 | 1.1.1 | Double-clic sur une image/vidéo = visionneuse de Kane (navigation sur le dossier), liste vide après un tri corrigée, glisser depuis la marge d'une tuile sélectionnée |
 | 1.1.2 | Correction de la sélection multiple « fantôme » après un clic sur le vide (rectangle de sélection resté en attente) |
+| 1.2.0 | Palette Ctrl+K, recherche avancée et recherches enregistrées, notes en étoiles, colonnes personnalisables, sessions d'onglets, apparence, annuler Ctrl+Z, archives comme dossiers, ComfyUI retiré |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -168,6 +176,19 @@ d'abord si elle est minimisée) : une cible externe reçoit FileDrop, Shell IDLi
 **1.1.2** : correction de la sélection multiple « fantôme » : `lassoEnd` plantait (`lasso.el` nul) sur un
 simple clic dans le vide et laissait un rectangle en attente, qui se déclenchait au clic suivant. Désormais : `?.remove()`,
 fin du rectangle à chaque `pointerdown`, `pointerup` / `pointercancel` de la fenêtre et `blur`, seuil de 6 px (hypot).
+
+**1.2.0 (aussi)** : support ComfyUI retiré (analyse des workflows, textes, README) à la demande de l'utilisateur,
+qui n'utilise plus ComfyUI ; son dossier `Documents\ComfyUI` a été envoyé à la Corbeille.
+
+**1.2.0** : palette de commandes ; syntaxe de recherche (`type:`, `ext:`, `size:`, `date:`,
+`note:`, `tag:`, `p:`, mots multiples en ET) et recherches enregistrées ; notes en étoiles (`kane.ratings`, Alt+1…5, suit
+les renommages via `moveTag`) ; colonnes personnalisables (`kane.columns`, `kane.colW` ; seules les lignes visibles lisent
+leurs métadonnées, un tri sur une colonne de métadonnées lit tout le dossier par lots de 120 avec progression ; les colonnes
+qui ne tiennent pas sont masquées par `visibleColumns`) ; sessions d'onglets (`kane.sessions`) ; apparence (`prefs.theme`,
+`accent`, `density`, `applyLook`) ; annulation Ctrl+Z (pile par fenêtre, 30 niveaux) ; archives parcourues comme des dossiers
+(option `openArchives`). Pièges : `tar` dans un shell Git est GNU tar (pas de .zip) : toujours `System32/tar.exe` ;
+`tar -tv` affiche mois/jours dans la langue du système et les noms en page de codes ANSI (Windows-1252) ; un nom non
+convertible dans cette page est ignoré par tar. La Corbeille se restaure par `Shell.Application` (`InvokeVerb('undelete')`).
 
 ## 8. Ce qui n'a pas été testé en conditions réelles
 

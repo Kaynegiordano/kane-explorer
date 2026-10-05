@@ -9,7 +9,9 @@ use tauri::{Emitter, Manager, State, WebviewWindow};
 
 #[cfg(windows)]
 mod win;
+mod columns;
 mod extras;
+mod fsx;
 
 #[derive(Serialize)]
 struct Entry {
@@ -676,6 +678,31 @@ async fn scan_prompts(dir: String) -> Result<std::collections::HashMap<String, S
 }
 
 #[tauri::command]
+async fn file_columns(paths: Vec<String>, ai: bool) -> Result<Vec<columns::FileCols>, String> {
+    blocking(move || columns::file_columns(&paths, ai)).await
+}
+
+#[tauri::command]
+async fn trash_restore(paths: Vec<String>) -> Result<Vec<String>, String> {
+    blocking(move || fsx::trash_restore(&paths)).await?
+}
+
+#[tauri::command]
+async fn archive_list(archive: String) -> Result<Vec<fsx::ArchEntry>, String> {
+    blocking(move || fsx::archive_list(&archive)).await?
+}
+
+#[tauri::command]
+async fn archive_extract(archive: String, names: Vec<String>, dest: String) -> Result<(), String> {
+    blocking(move || fsx::archive_extract(&archive, &names, &dest)).await?
+}
+
+#[tauri::command]
+async fn archive_extract_temp(archive: String, name: String) -> Result<String, String> {
+    blocking(move || fsx::archive_extract_temp(&archive, &name)).await?
+}
+
+#[tauri::command]
 async fn move_items(moves: Vec<(String, String)>) -> Result<extras::MoveResult, String> {
     blocking(move || extras::move_items(&moves)).await
 }
@@ -1026,6 +1053,11 @@ pub fn run() {
             windows_folder_options,
             dir_count,
             path_states,
+            file_columns,
+            trash_restore,
+            archive_list,
+            archive_extract,
+            archive_extract_temp,
             move_items,
             remove_empty_dirs,
             create_file,

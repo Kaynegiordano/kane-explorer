@@ -19,7 +19,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #17181c;
     --panel: #1d1f24;
     --sidebar: #141519;
@@ -37,6 +37,26 @@
     --code-bg: #15161a;
     color-scheme: dark;
   }
+}
+
+/* Thème choisi dans les Options (Apparence) : prioritaire sur le réglage de Windows */
+:root[data-theme="dark"] {
+  --bg: #17181c;
+  --panel: #1d1f24;
+  --sidebar: #141519;
+  --text: #e8eaf0;
+  --muted: #8c92a1;
+  --border: #2a2d35;
+  --hover: #262932;
+  --accent: #6d8bff;
+  --accent-soft: #263156;
+  --danger: #ff6369;
+  --shadow: 0 8px 30px rgba(0, 0, 0, .5);
+  --page: #2c2f38;
+  --page-fold: #3a3e49;
+  --page-line: #545a68;
+  --code-bg: #15161a;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -152,19 +172,11 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 /* Vue liste */
 .list-head, .row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 128px 140px 76px;
+  grid-template-columns: var(--cols, minmax(120px, 1fr) 128px 140px 76px);
   align-items: center;
   gap: 12px;
 }
-/* Colonnes adaptées à la largeur disponible */
-@container (max-width: 640px) {
-  .list-head, .row { grid-template-columns: minmax(120px, 1fr) 128px 76px; }
-  .list-head > :nth-child(3), .row > :nth-child(3) { display: none; }
-}
-@container (max-width: 420px) {
-  .list-head, .row { grid-template-columns: minmax(100px, 1fr) 70px; }
-  .list-head > :nth-child(2), .row > :nth-child(2) { display: none; }
-}
+/* Les colonnes qui ne tiennent pas dans la largeur sont retirées par meta.js (visibleColumns) */
 .list-head {
   position: sticky; top: 0; z-index: 1;
   height: 34px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--border);
@@ -179,7 +191,7 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .vbody.grid { margin: 12px 16px 24px; }
 .vwin { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
 .vwin.grid { display: grid; gap: 6px; }
-.row { height: 34px; border-radius: 6px; padding: 0 16px; }
+.row { height: var(--row-h, 34px); border-radius: 6px; padding: 0 16px; }
 .row .name { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .meta { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

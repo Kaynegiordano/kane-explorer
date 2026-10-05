@@ -46,10 +46,17 @@ génère `latest.json` et crée la Release GitHub. **Sauvegardez cette clé** : 
 - Corbeille, copie et déplacement via le moteur de l'Explorateur (progression, conflits)
 - Glisser-déposer avec Windows et les autres logiciels ; la fenêtre survolée passe au premier plan
 - OneDrive : état de synchronisation, « Toujours conserver », « Libérer de l'espace »
-- Images IA (Forge / A1111 / ComfyUI) : prompt, seed, modèle ; recherche `p:` ; comparaison côte à côte
+- Images IA (Forge / A1111) : prompt, seed, modèle ; recherche `p:` ; comparaison côte à côte
 - Visionneuse de tri, étiquettes de couleur, dossiers épinglés, renommage en lot
 - Analyse de l'espace disque, recherche de doublons, conversions ffmpeg, badges Git / projets
 - Raccourcis OBS, Wallpaper Engine, Forge ; bascule réseau Ethernet / USB / Wi-Fi
+- Palette de commandes (Ctrl+K) : commandes, dossiers, fichiers, sessions, recherches
+- Recherche avancée (`type:image size:>5mo date:<7j note:4+ p:…`) et recherches enregistrées dans la barre latérale
+- Notes en étoiles (Alt+1…5), colonnes personnalisables (dimensions, durée, modèle / seed / prompt IA, note…)
+- Sessions d'onglets, épinglés (dossiers, fichiers, lecteurs), accès rapide personnalisable, Étagère
+- Annuler (Ctrl+Z) : suppression, collage, déplacement, renommage, création, rangement, ZIP
+- Parcourir les archives (zip, 7z, rar, tar, iso) comme des dossiers ; Ranger ; ZIP / Extraire
+- Apparence : thème, couleur d'accent, densité des lignes, animations
 
 ## Développement
 
@@ -64,6 +71,10 @@ npm run dev
 | `src/styles.css`, `src/creative.css` | Design (thème clair / sombre automatique) |
 | `src/main.js` | Navigation, onglets, affichage virtualisé, aperçu, menus |
 | `src/features.js` | Fonctions avancées (IA, visionneuse, OneDrive, réseau, mises à jour…) |
+| `src/pins.js`, `src/tools.js` | Épinglés et accès rapide ; Étagère, Ranger, ZIP, Nouveau fichier |
+| `src/search.js`, `src/meta.js` | Recherche avancée et recherches enregistrées ; notes et colonnes |
+| `src/palette.js`, `src/undo.js`, `src/archive.js` | Palette Ctrl+K et sessions ; annulation ; archives comme dossiers |
+| `src-tauri/src/columns.rs`, `src-tauri/src/fsx.rs` | Dimensions / durée des colonnes ; Corbeille (annulation) et archives |
 | `src-tauri/src/lib.rs` | Commandes de l'application (fichiers, fenêtres, registre, mises à jour) |
 | `src-tauri/src/win.rs` | Intégration Windows (shell, miniatures, aperçus, presse-papiers…) |
 | `src-tauri/src/extras.rs` | Métadonnées IA, projets, analyse disque, doublons, ffmpeg, réseau |
@@ -76,9 +87,12 @@ npm run dev
 |---|---|
 | Espace | Visionneuse (tri rapide : ← → naviguer, G garder, 1-6 étiquettes, Suppr Corbeille, I infos) |
 | F2 (plusieurs éléments) | Renommer en lot |
-| Recherche `p: …` | Chercher dans les prompts des images IA (Forge / A1111 / ComfyUI) |
+| Recherche `p: …` | Chercher dans les prompts des images IA (Forge / A1111) |
 | Recherche `tag: …` | Filtrer par étiquette de couleur (rouge, vert…) |
 | Ctrl+, | Options des dossiers |
+| Ctrl+K (ou Ctrl+Maj+P) | Palette de commandes (`>` commandes, `@` dossiers, `#` fichiers) |
+| Ctrl+Z | Annuler la dernière opération faite dans Kane |
+| Alt+1 … Alt+5 / Alt+0 | Noter les fichiers sélectionnés / retirer la note |
 | Ctrl+N | Nouvelle fenêtre |
 | Glisser-déposer | Déplacer (même disque) ou copier (autre disque) ; Ctrl = copier, Maj = déplacer |
 | Ctrl+T / Ctrl+W | Nouvel onglet / Fermer l'onglet |

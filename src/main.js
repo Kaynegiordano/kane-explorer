@@ -5,7 +5,7 @@ const { listen } = window.__TAURI__.event;
 const HOME = '::home';
 
 // Dimensions de l'affichage virtualisé (doivent correspondre au CSS)
-const ROW_H = 34;
+let ROW_H = 34; // 28 en densité compacte (voir applyLook)
 const TILE_W = 112;
 const TILE_H = 128;
 const GAP = 6;
@@ -45,12 +45,33 @@ const prefs = {
   foldersFirst: store.get('foldersFirst', true),
   confirmDelete: store.get('confirmDelete', false),
   animations: store.get('animations', true),
-  viewerOnOpen: store.get('viewerOnOpen', true),     // images / vidéos : visionneuse de Kane (navigation image par image)
+  viewerOnOpen: store.get('viewerOnOpen', true),
+  openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
+  theme: store.get('theme', 'auto'),                 // auto | light | dark
+  accent: store.get('accent', ''),                   // '' = couleur d'origine, sinon #rrggbb
+  density: store.get('density', 'comfortable'),      // comfortable | compact     // images / vidéos : visionneuse de Kane (navigation image par image)
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'double', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true,
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, openArchives: true, theme: 'auto', accent: '', density: 'comfortable',
 };
+
+/** Apparence : thème, couleur d'accent, densité des lignes. */
+const ACCENTS = [['Bleu', '#4a6cf7'], ['Violet', '#8b5cf6'], ['Rose', '#e0457b'], ['Rouge', '#e5484d'], ['Orange', '#f97316'], ['Vert', '#16a34a'], ['Turquoise', '#0ea5a4']];
+function applyLook() {
+  const root = document.documentElement;
+  if (prefs.theme === 'light' || prefs.theme === 'dark') root.dataset.theme = prefs.theme; else delete root.dataset.theme;
+  if (/^#[0-9a-f]{6}$/i.test(prefs.accent)) {
+    root.style.setProperty('--accent', prefs.accent);
+    root.style.setProperty('--accent-soft', `color-mix(in srgb, ${prefs.accent} 18%, var(--panel))`);
+  } else {
+    root.style.removeProperty('--accent');
+    root.style.removeProperty('--accent-soft');
+  }
+  ROW_H = prefs.density === 'compact' ? 28 : 34;
+  root.style.setProperty('--row-h', ROW_H + 'px');
+}
+applyLook();
 
 // Fenêtre secondaire (ouverte via « nouvelle fenêtre ») : ne touche pas aux onglets mémorisés
 const START_PATH = window.__KANE_START__ || null;
@@ -123,9 +144,9 @@ const CLOUD_ONLY = 0x1000 | 0x40000 | 0x400000; // attributs OneDrive « en lign
 const isCloudOnly = (e) => !e.is_dir && !!(e.attrs & CLOUD_ONLY);
 const thumbUrl = (e, size, mode = 't') =>
   `http://thumb.localhost/${encodeURIComponent(e.path)}?s=${Math.round(size * devicePixelRatio)}&m=${isCloudOnly(e) ? 'c' : mode}&v=${e.modified}`;
-const isApp = (e) => !e.is_dir && APP_ICON.has(e.ext);
+const isApp = (e) => !e.is_dir && !e.virtual && APP_ICON.has(e.ext);
 const isTextual = (e) => TEXT_VIEW.has(e.ext) || e.kind === 'code' || (!e.ext && e.size < 1e6);
-const wantsThumb = (e) => !e.is_dir && ((THUMB_KINDS.has(e.kind) && !TEXT_VIEW.has(e.ext)) || THUMB_EXT.has(e.ext));
+const wantsThumb = (e) => !e.is_dir && !e.virtual && ((THUMB_KINDS.has(e.kind) && !TEXT_VIEW.has(e.ext)) || THUMB_EXT.has(e.ext));
 
 const COLORS = {
   image: '#22a06b', video: '#8b5cf6', audio: '#e0457b', pdf: '#e5484d', doc: '#3b82f6', sheet: '#16a34a',
@@ -203,9 +224,18 @@ async function navigate(path, { push = true, t = tab, select = null } = {}) {
   if (push && path !== HOME && t.path !== HOME && samePath(path, t.path)) return refresh();
   const id = ++t.loadId;
   let entries = [];
+  let virtual = null; // { archive, inner } quand le chemin est dans une archive
   if (path !== HOME) {
     try { entries = prepare(await invoke('list_dir', { path })); }
-    catch (e) { if (t === tab) toast(cleanError(e), 'error'); return false; }
+    catch (e) {
+      // Pas un dossier : peut-être une archive (zip, 7z...) parcourue comme un dossier (archive.js)
+      const arch = splitArchivePath(path);
+      try {
+        if (!arch) throw e;
+        entries = prepare(await loadArchive(arch, false));
+        virtual = arch;
+      } catch (e2) { if (t === tab) toast(cleanError(arch ? e2 : e), 'error'); return false; }
+    }
   }
   if (id !== t.loadId) return false; // une navigation plus récente a eu lieu
   if (push) {
@@ -213,7 +243,8 @@ async function navigate(path, { push = true, t = tab, select = null } = {}) {
     t.history.push(path);
     t.hIndex = t.history.length - 1;
   }
-  Object.assign(t, { path, entries, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
+  noteVisit(path); // dossiers récents de la palette (palette.js)
+  Object.assign(t, { path, entries, virtual, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
   if (t === tab) {
     els.search.value = '';
     watchCurrent();
@@ -242,8 +273,16 @@ async function refresh(force = false) {
   if (t.path === HOME) { await loadSidebar(); render(); return true; }
   const id = ++t.loadId;
   let entries;
-  try { entries = prepare(await invoke('list_dir', { path: t.path })); }
-  catch (e) { if (t === tab) toast(cleanError(e), 'error'); return false; }
+  try { entries = prepare(t.virtual ? await loadArchive(t.virtual, true) : await invoke('list_dir', { path: t.path })); }
+  catch (e) {
+    // Onglet restauré dans une archive : le chemin n'est pas un dossier, on le lit comme archive
+    const arch = t.virtual ? null : splitArchivePath(t.path);
+    try {
+      if (!arch) throw e;
+      entries = prepare(await loadArchive(arch, true));
+      t.virtual = arch;
+    } catch (e2) { if (t === tab) toast(cleanError(arch ? e2 : e), 'error'); return false; }
+  }
   if (id !== t.loadId) return false;
   // Rien n'a changé (évènement du système sans effet visible) : on évite tout le rendu et les analyses
   if (force !== true && t.loaded && entrySignature(entries) === entrySignature(t.entries)) return true;
@@ -367,7 +406,7 @@ let renaming = false;
 let autoTimer = 0;
 
 function watchCurrent() {
-  invoke('watch_dir', { path: tab.path === HOME ? null : tab.path }).catch(() => { /* lecteur non surveillable */ });
+  invoke('watch_dir', { path: tab.path === HOME || tab.virtual ? null : tab.path }).catch(() => { /* lecteur non surveillable */ });
 }
 
 listen('dir-changed', (ev) => {
@@ -388,6 +427,7 @@ function computeItems() {
     if (k === 'size') r = a.size - b.size;
     else if (k === 'modified') r = a.modified - b.modified;
     else if (k === 'type') r = collator.compare(a.type, b.type);
+    else if (COLS[k]) r = COLS[k].cmp(a, b); // colonnes personnalisables (meta.js)
     return (r || collator.compare(a.display || a.name, b.display || b.name)) * d;
   });
   return list;
@@ -395,7 +435,7 @@ function computeItems() {
 
 function render() {
   if (tab.path === HOME) { tab.items = []; renderHome(); }
-  else { tab.items = computeItems(); renderFiles(); }
+  else { tab.items = computeItems(); renderFiles(); ensureSortMeta(); }
   renderChrome();
   schedulePreview();
 }
@@ -417,13 +457,10 @@ function renderFiles() {
     const arrow = (k) => prefs.sortKey !== k ? '' : prefs.sortDir > 0
       ? '<svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>'
       : '<svg viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>';
+    listCols = visibleColumns(els.content.clientWidth - 48); // colonnes choisies qui tiennent dans la largeur (meta.js)
     els.content.innerHTML =
-      `<div class="list-head">
-        <button data-sort="name">Nom ${arrow('name')}</button>
-        <button data-sort="modified">Modifié le ${arrow('modified')}</button>
-        <button data-sort="type">Type ${arrow('type')}</button>
-        <button data-sort="size" class="num">Taille ${arrow('size')}</button>
-      </div><div class="vbody list" id="vbody"><div class="vwin" id="vwin"></div></div>`;
+      `<div class="list-head"><button data-sort="name">Nom ${arrow('name')}</button>${listCols.map((k) => headCell(k, arrow)).join('')}` +
+      `</div><div class="vbody list" id="vbody"><div class="vwin" id="vwin"></div></div>`;
   }
   layoutWindow();
   renderWindow(true); // sans cela, la liste reste vide jusqu'au prochain défilement (tri, type d'affichage...)
@@ -444,6 +481,7 @@ function layoutWindow() {
   } else {
     view.cols = 1;
     view.stride = ROW_H;
+    els.content.style.setProperty('--cols', colTemplate(listCols));
   }
   const rows = Math.ceil(tab.items.length / view.cols);
   vbody.style.height = rows * view.stride + 'px';
@@ -461,14 +499,12 @@ function itemHtml(e, i) {
       : wantsThumb(e)
         ? `<img class="thumb" src="${thumbUrl(e, 128)}" decoding="async" draggable="false" alt="">`
         : fileIcon(e));
-    return `<div class="${c} tile" data-i="${i}" title="${esc(e.name)}">${visual}<div class="label">${tagDot(e)}${esc(itemLabel(e))}</div></div>`;
+    return `<div class="${c} tile" data-i="${i}" title="${esc(e.name)}">${visual}<div class="label">${tagDot(e)}${esc(itemLabel(e))}</div>${ratingBadge(e)}</div>`;
   }
   const icon = isApp(e) ? `<img class="ficon" src="${thumbUrl(e, 24, 'i')}" decoding="async" draggable="false" alt="">` : fileIcon(e);
   return `<div class="${c} row" data-i="${i}">` +
     `<div class="name">${icon}${tagDot(e)}<span>${esc(itemLabel(e))}</span>${itemBadges(e)}</div>` +
-    `<div class="meta">${e.modified ? dateFmt.format(e.modified) : ''}</div>` +
-    `<div class="meta">${esc(itemType(e))}</div>` +
-    `<div class="meta num">${e.is_dir ? '' : fmtSize(e.size)}</div></div>`;
+    `${listCols.map((k) => cellHtml(k, e)).join('')}</div>`;
 }
 
 /** N'affiche que les éléments visibles (+ une marge) : instantané même avec 100 000 fichiers. */
@@ -493,12 +529,13 @@ function renderWindow(force) {
     return h;
   };
   // Reconstruction complète (changement de données, de mise en page, grand saut de défilement)
-  if (force || prevFirst < 0 || first >= prevLast || last <= prevFirst) { vwin.innerHTML = html(first, last); return; }
+  if (force || prevFirst < 0 || first >= prevLast || last <= prevFirst) { vwin.innerHTML = html(first, last); requestVisibleMeta(); return; }
   // Défilement normal : on ne touche qu'aux lignes qui entrent ou sortent (miniatures conservées, pas de rechargement)
   while (vwin.firstChild && +vwin.firstChild.dataset.i < first) vwin.firstChild.remove();
   while (vwin.lastChild && +vwin.lastChild.dataset.i >= last) vwin.lastChild.remove();
   if (first < prevFirst) vwin.insertAdjacentHTML('afterbegin', html(first, Math.min(prevFirst, last)));
   if (last > prevLast) vwin.insertAdjacentHTML('beforeend', html(Math.max(prevLast, first), last));
+  requestVisibleMeta();
 }
 
 let scrollRaf = 0;
@@ -507,7 +544,16 @@ els.content.addEventListener('scroll', () => {
 }, { passive: true });
 
 new ResizeObserver(() => {
-  if (tab && tab.path !== HOME && $('vbody')) { layoutWindow(); renderWindow(true); }
+  if (!tab || tab.path === HOME || !$('vbody')) return;
+  // Moins (ou plus) de colonnes qui tiennent : l'en-tête doit être reconstruit
+  if (prefs.view === 'list' && visibleColumns(els.content.clientWidth - 48).join() !== listCols.join()) {
+    const top = els.content.scrollTop;
+    render();
+    els.content.scrollTop = top;
+    return;
+  }
+  layoutWindow();
+  renderWindow(true);
 }).observe(els.content);
 
 // Miniature / icône indisponible -> icône Kane classique
@@ -559,6 +605,7 @@ function renderChrome() {
   els.crumbs.scrollLeft = els.crumbs.scrollWidth;
 
   markActive();
+  if (typeof syncSaveBtn === 'function') syncSaveBtn(); // bouton « Enregistrer la recherche » (search.js)
 
   els.back.disabled = tab.hIndex <= 0;
   els.forward.disabled = tab.hIndex >= tab.history.length - 1;
@@ -691,6 +738,8 @@ function displayName(e) {
 
 /** Ouvre un élément. Les dossiers suivent l'option « Ouvrir les dossiers ». */
 async function openEntry(e) {
+  if (e.virtual) return e.is_dir ? navigate(e.path) : openVirtual(e); // élément d'une archive (archive.js)
+  if (!e.is_dir && prefs.openArchives && ARCHIVE_EXT.has(e.ext)) return navigate(e.path);
   if (e.is_dir) {
     if (prefs.openFolders === 'tab') return newTab(e.path);
     if (prefs.openFolders === 'window') return winCall('new_window', { path: e.path });
@@ -722,6 +771,7 @@ function openSelection() {
 }
 
 async function doTrash() {
+  if (blockedVirtual()) return;
   const paths = selectedPaths();
   if (!paths.length) return;
   if (prefs.confirmDelete) {
@@ -732,12 +782,14 @@ async function doTrash() {
     await releaseHandles();
     if (await invoke('trash_paths', { paths })) { toast('Opération annulée'); await refresh(); return; }
     toast(paths.length > 1 ? `${paths.length} éléments envoyés à la Corbeille` : `« ${basename(paths[0])} » envoyé à la Corbeille`);
+    pushUndo(paths.length > 1 ? `Corbeille : ${paths.length} éléments` : `Corbeille : ${basename(paths[0])}`, () => undoTrash(paths));
   } catch (e) { toast(cleanError(e), 'error'); }
   await refresh();
 }
 
 /** Copier / couper : passe par le presse-papiers Windows (compatible avec l'Explorateur). */
 async function doCopy(cut) {
+  if (blockedVirtual()) return;
   const paths = selectedPaths();
   if (!paths.length) return;
   try {
@@ -749,7 +801,7 @@ async function doCopy(cut) {
 }
 
 async function doPaste() {
-  if (tab.path === HOME) return;
+  if (tab.path === HOME || blockedVirtual()) return;
   let clip;
   try { clip = await invoke('clipboard_get'); }
   catch (e) { toast(cleanError(e), 'error'); return; }
@@ -761,6 +813,7 @@ async function doPaste() {
     if (clip.cut) { shared.cut = new Set(); invoke('clipboard_clear').catch(() => {}); }
     tab.selected = new Set(created);
     toast(`${plural(created.length, 'élément')} ${clip.cut ? 'déplacé' : 'collé'}${created.length > 1 ? 's' : ''}`);
+    recordPaste(clip.paths, created, clip.cut, clip.cut ? 'Déplacement' : 'Collage');
   } catch (e) { toast(cleanError(e), 'error'); }
   clearTimeout(slow);
   await refresh();
@@ -768,9 +821,10 @@ async function doPaste() {
 }
 
 async function doNewFolder() {
-  if (tab.path === HOME) return;
+  if (tab.path === HOME || blockedVirtual()) return;
   try {
     const p = await invoke('create_folder', { parent: tab.path });
+    pushUndo('Nouveau dossier', () => undoCreate([p]));
     tab.filter = ''; els.search.value = '';
     tab.selected = new Set([p]);
     await refresh();
@@ -807,6 +861,8 @@ function startRename(i) {
     if (commit && v && v !== e.name) {
       try {
         const np = await invoke('rename_entry', { path: e.path, newName: v });
+        moveTag(e.path, np); // étiquette et note suivent le fichier
+        pushUndo(`Renommage de « ${e.name} »`, async () => { await invoke('rename_entry', { path: np, newName: e.name }); moveTag(np, e.path); });
         tab.selected = new Set([np]);
         await refresh();
         tab.focus = tab.anchor = tab.items.findIndex((x) => x.path === np);
@@ -829,6 +885,7 @@ function startRename(i) {
 }
 
 function renameSelection() {
+  if (blockedVirtual()) return;
   if (tab.selected.size !== 1) return;
   const i = tab.items.findIndex((e) => tab.selected.has(e.path));
   if (i >= 0) startRename(i);
@@ -858,10 +915,10 @@ function setView(v) {
 const winCall = (cmd, args) => invoke(cmd, args).catch((e) => toast(cleanError(e), 'error'));
 const targetPaths = () => (tab.selected.size ? selectedPaths() : tab.path === HOME ? [] : [tab.path]);
 
-function shellMenu(paths = targetPaths()) { if (paths.length) winCall('shell_menu', { paths }); }
-function showProperties(paths = targetPaths()) { if (paths.length) winCall('properties', { paths }); }
+function shellMenu(paths = targetPaths()) { if (!blockedVirtual() && paths.length) winCall('shell_menu', { paths }); }
+function showProperties(paths = targetPaths()) { if (!blockedVirtual() && paths.length) winCall('properties', { paths }); }
 function openWith(path) { winCall('open_with', { path }); }
-function openTerminal(path = tab.path) { if (path !== HOME) winCall('open_terminal', { path }); }
+function openTerminal(path = tab.path) { if (tab.virtual && path === tab.path) path = parentOf(tab.virtual.archive); if (path !== HOME) winCall('open_terminal', { path }); }
 
 /* ---------------- Volet d'aperçu ---------------- */
 
@@ -955,6 +1012,7 @@ async function updatePreview() {
   }
 
   const e = sel[0];
+  if (e.virtual) { pv.innerHTML = virtualPreview(e); return; }
   previewEntry = e;
   const src = convertFileSrc(e.path);
   const thumb = (size, mode) => `<div class="pv-visual"><img class="pv-thumb${mode === 'i' ? ' icon' : ''}" src="${thumbUrl(e, size, mode)}" alt=""></div>`;
@@ -1130,6 +1188,7 @@ function hideMenu() {
 }
 
 function itemMenu() {
+  if (tab.virtual) return virtualItemMenu(selectedEntries());
   const sel = selectedEntries();
   const one = sel.length === 1 ? sel[0] : null;
   return [
@@ -1154,6 +1213,7 @@ function itemMenu() {
 }
 
 function blankMenu() {
+  if (tab.virtual) return virtualBlankMenu();
   return [
     { label: 'Nouveau dossier', kbd: 'Ctrl+Maj+N', run: doNewFolder },
     { label: 'Coller', kbd: 'Ctrl+V', run: doPaste },
@@ -1225,7 +1285,7 @@ els.content.addEventListener('pointerdown', (ev) => {
 els.content.addEventListener('pointerup', () => { dragStart = null; });
 els.content.addEventListener('pointermove', (ev) => {
   if (!dragStart) return;
-  if (!(ev.buttons & 1)) { dragStart = null; return; }
+  if (tab.virtual || !(ev.buttons & 1)) { dragStart = null; return; } // pas de glisser depuis une archive
   if (Math.abs(ev.clientX - dragStart.x) + Math.abs(ev.clientY - dragStart.y) < 8) return;
   const e = tab.items[dragStart.i];
   if (!tab.selected.has(e.path)) { selectOnly(dragStart.i); tab.focus = dragStart.i; paintSelection(); }
@@ -1404,6 +1464,7 @@ async function dropInto(paths, dest) {
   if (!paths?.length) return;
   if (dest === PIN_ZONE) return pinDropped(paths);
   if (dest === SHELF_ZONE) return shelfDropped(paths);
+  if (tab.virtual && dest.toLowerCase().startsWith(tab.virtual.archive.toLowerCase())) { blockedVirtual(); return; }
   const mods = await invoke('key_state').catch(() => ({ ctrl: false, shift: false }));
   const drive = (p) => p.slice(0, 2).toLowerCase();
   const move = mods.ctrl ? false : mods.shift ? true : paths.every((p) => drive(p) === drive(dest));
@@ -1413,6 +1474,7 @@ async function dropInto(paths, dest) {
   try {
     const created = await invoke('paste', { paths: todo, dest, cut: move });
     toast(`${plural(created.length, 'élément')} ${move ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} vers « ${basename(dest) || dest} »`);
+    recordPaste(todo, created, move, move ? 'Déplacement' : 'Copie');
     if (samePath(dest, tab.path)) tab.selected = new Set(created);
   } catch (e) { toast(cleanError(e), 'error'); }
   clearTimeout(slow);
@@ -1694,6 +1756,17 @@ function openOptions() {
       <div class="row-inline"><input type="text" name="startPath" value="${esc(prefs.startPath)}" placeholder="C:\\Users\\…" spellcheck="false">
         <button class="btn" data-act="current">Dossier actuel</button></div>
     </fieldset>
+    <fieldset><legend>Apparence</legend>
+      ${radio('theme', 'auto', 'Thème de Windows')}
+      ${radio('theme', 'light', 'Clair')}
+      ${radio('theme', 'dark', 'Sombre')}
+      <div class="row-inline accent-row" style="padding-left:0"><span>Couleur d'accent</span>
+        ${ACCENTS.map(([n, c]) => `<button class="swatch${prefs.accent.toLowerCase() === c ? ' on' : ''}" data-accent="${c}" title="${n}" style="background:${c}"></button>`).join('')}
+        <input type="color" name="accentColor" value="${/^#[0-9a-f]{6}$/i.test(prefs.accent) ? prefs.accent : '#4a6cf7'}" title="Couleur personnalisée">
+        <button class="btn" data-accent="">Par défaut</button></div>
+      ${radio('density', 'comfortable', 'Lignes aérées')}
+      ${radio('density', 'compact', 'Lignes compactes (plus d’éléments à l’écran)')}
+    </fieldset>
     <fieldset><legend>Accès rapide</legend>
       <p class="lead">Choisissez les raccourcis de la barre latérale et de l'accueil.</p>
       <button class="btn" data-act="quick">Personnaliser l'accès rapide…</button>
@@ -1712,6 +1785,7 @@ function openOptions() {
       ${check('showProtected', 'Afficher les fichiers protégés du système d\u2019exploitation')}
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
+      ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
     </fieldset>
@@ -1726,6 +1800,7 @@ function openOptions() {
   const apply = () => {
     document.body.classList.toggle('single-click', prefs.clickMode === 'single');
     document.body.classList.toggle('no-anim', !prefs.animations);
+    applyLook();
     previewKey = '';
     render();
     renderWindow(true);
@@ -1734,6 +1809,7 @@ function openOptions() {
     const el = ev.target;
     if (el.type === 'radio') savePref(el.name, el.value);
     else if (el.type === 'checkbox') savePref(el.name, el.checked);
+    else if (el.name === 'accentColor') { savePref('accent', el.value); modalBox.querySelectorAll('.swatch').forEach((b) => b.classList.remove('on')); }
     else if (el.name === 'startPath') { savePref('startPath', el.value.trim()); savePref('startup', 'custom'); modalBox.querySelector('[value=custom]').checked = true; }
     apply();
   };
@@ -1741,6 +1817,12 @@ function openOptions() {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') closeModal();
     else if (act === 'windows') winCall('windows_folder_options');
+    else if (ev.target.closest('[data-accent]')) {
+      const b = ev.target.closest('[data-accent]');
+      savePref('accent', b.dataset.accent);
+      modalBox.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('on', x === b));
+      apply();
+    }
     else if (act === 'quick') { closeModal(); openQuickEditor(); }
     else if (act === 'default') toggleDefaultExplorer();
     else if (act === 'update') {

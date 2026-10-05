@@ -88,6 +88,7 @@ function setTag(paths, color) {
 }
 
 function moveTag(from, to) {
+  moveRating(from, to); // la note suit le fichier renommé (meta.js)
   const t = kTags[lc(from)];
   if (!t) return;
   delete kTags[lc(from)];
@@ -114,7 +115,7 @@ function afterLoad(t, isRefresh = false) {
   if (t === tab) publishWindow();
   if (!isRefresh) { t.info = null; t.git = null; }
   t.prompts = null;
-  if (t.path === HOME) { t.sub = null; return; }
+  if (t.path === HOME || t.virtual) { t.sub = null; if (t.virtual) { t.info = null; t.git = null; } return; }
   const path = t.path;
   const still = () => t.path === path;
   if (t.entries.some((e) => e.is_dir)) {
@@ -178,9 +179,10 @@ function itemType(e) {
 }
 
 function itemBadges(e) {
+  const stars = listCols.includes('rating') ? '' : ratingBadge(e);
   const s = subOf(e);
-  if (!s) return '';
-  let html = '';
+  if (!s) return stars;
+  let html = stars;
   if (s.git_branch) html += `<em class="badge git">⎇ ${esc(s.git_branch)}</em>`;
   for (const k of s.projects.slice(0, 2)) if (k !== 'Wallpaper Engine') html += `<em class="badge">${esc(k)}</em>`;
   return html;
@@ -192,24 +194,6 @@ function weVisual(e) {
   if (!we?.preview) return '';
   const p = { path: we.preview, modified: e.modified };
   return `<img class="thumb" src="${thumbUrl(p, 128)}" data-anim="${convertFileSrc(we.preview)}" decoding="async" draggable="false" alt="">`;
-}
-
-/* ---------------- Recherche (nom, prompt, étiquette) ---------------- */
-
-function parseFilter(raw) {
-  const s = (raw || '').trim();
-  let m;
-  if ((m = s.match(/^p(?:rompt)?:\s*([\s\S]*)$/i))) return { mode: 'prompt', q: m[1].toLowerCase() };
-  if ((m = s.match(/^tag:\s*(.*)$/i))) return { mode: 'tag', q: m[1].toLowerCase() };
-  return { mode: 'name', q: s.toLowerCase() };
-}
-
-function matchFilter(e, f) {
-  if (f.mode === 'name') return !f.q || e.lname.includes(f.q) || e.name.toLowerCase().includes(f.q) || (weOf(e)?.title || '').toLowerCase().includes(f.q);
-  if (f.mode === 'tag') { const t = tagOf(e); return !!t && t.startsWith(f.q); }
-  if (!tab.prompts) { loadPrompts(tab); return false; }
-  const p = tab.prompts[e.path];
-  return !!p && (!f.q || p.includes(f.q));
 }
 
 function loadPrompts(t) {
@@ -227,7 +211,7 @@ function loadPrompts(t) {
   }).catch(() => { t.promptsLoading = false; });
 }
 
-/* ---------------- Métadonnées IA (Forge / A1111 / ComfyUI) ---------------- */
+/* ---------------- Métadonnées IA (Forge / A1111) ---------------- */
 
 /** Découpe le texte « parameters » de Forge / A1111. */
 function parseParameters(text) {
@@ -246,31 +230,10 @@ function parseParameters(text) {
   return { prompt, negative, params };
 }
 
-/** Workflow ComfyUI : textes des nœuds CLIPTextEncode et réglages du KSampler. */
-function parseComfy(json) {
-  const nodes = Object.values(JSON.parse(json));
-  const texts = [];
-  const params = [];
-  for (const n of nodes) {
-    const t = n?.class_type || '';
-    const i = n?.inputs || {};
-    if (t.includes('CLIPTextEncode') && typeof i.text === 'string') texts.push(i.text);
-    if (t.startsWith('KSampler')) {
-      for (const [k, label] of [['seed', 'Seed'], ['noise_seed', 'Seed'], ['steps', 'Steps'], ['cfg', 'CFG scale'], ['sampler_name', 'Sampler'], ['scheduler', 'Schedule type']]) {
-        if (i[k] !== undefined && typeof i[k] !== 'object') params.push([label, String(i[k])]);
-      }
-    }
-    if (t.includes('CheckpointLoader') && i.ckpt_name) params.push(['Model', String(i.ckpt_name)]);
-  }
-  return { prompt: texts[0] || '', negative: texts[1] || '', params };
-}
-
 function aiMeta(meta) {
   const get = (k) => meta.find(([key]) => key === k)?.[1];
   const a1111 = get('parameters');
   if (a1111) return { source: 'Forge / A1111', raw: a1111, ...parseParameters(a1111) };
-  const comfy = get('prompt');
-  if (comfy) { try { return { source: 'ComfyUI', raw: comfy, ...parseComfy(comfy) }; } catch { /* JSON invalide */ } }
   const desc = get('Description');
   if (desc) return { source: 'NovelAI', raw: desc, prompt: desc, negative: '', params: [] };
   return null;
@@ -305,6 +268,7 @@ function extraActions(e) {
   if (isViewable(e)) h += '<button data-pv="viewer">Visionneuse</button>';
   if (IMG_VIEW.has(e.ext)) h += '<button data-pv="wallpaper">Fond d’écran</button>';
   if ((e.is_dir || e.kind === 'code') && kTools.code) h += '<button data-pv="code">VS Code</button>';
+  if (!e.is_dir) h += `<button data-pv="rate">${ratingOf(e) ? '<span class="stars">' + '★'.repeat(ratingOf(e)) + '</span>' : 'Note ★'}</button>`;
   h += `<button data-pv="pin">${isPinned(e.path) ? 'Désépingler' : 'Épingler'}</button>`;
   const cloud = cloudState(e);
   if (cloud === 'online' || (e.is_dir && inOneDrive(e.path) && cloud !== 'pinned')) h += '<button data-pv="od-keep">Conserver sur cet appareil</button>';
@@ -381,6 +345,8 @@ function previewAction(a, e, btn) {
     case 'batch': openBatchRename(); break;
     case 'tag': tagMenu(selectedPaths()); break;
     case 'wallpaper': setWallpaper(e); break;
+    case 'rate': ratingMenu([e.path]); break;
+    case 'extract': extractVirtual([e]); break;
     case 'code': openCode(e.path); break;
     case 'pin': togglePins([e]); btn.textContent = isPinned(e.path) ? 'Désépingler' : 'Épingler'; break;
     case 'od-keep': oneDriveSet([e.path], true); break;
@@ -618,11 +584,12 @@ function openViewer(list, i) {
       <button data-v="info" title="Infos (I)">Infos</button>
       <button data-v="keep" title="Étiquette verte (G)">Garder</button>
       <button data-v="tag" title="Étiquette (1-6)">Étiquette</button>
+      <button data-v="rate" title="Note (Alt+1 à Alt+5)">Note ★</button>
       <button data-v="trash" class="danger" title="Corbeille (Suppr)">Corbeille</button>
       <button data-v="close" title="Fermer (Échap)">✕</button>
     </div>
     <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside></div>
-    <div class="vw-help">← → ou molette : image suivante · Entrée ouvrir · G garder · 1-6 étiquettes · 0 retirer · Suppr Corbeille · I infos · Échap fermer</div>`;
+    <div class="vw-help">← → ou molette : image suivante · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · 0 retirer · Suppr Corbeille · I infos · Échap fermer</div>`;
   showViewerItem();
 }
 
@@ -632,7 +599,7 @@ function showViewerItem() {
   stage.innerHTML = VIDEO_VIEW.has(e.ext)
     ? `<video src="${convertFileSrc(e.path)}" controls autoplay loop></video>`
     : `<img src="${assetOrThumb(e, 1024)}" alt="">`;
-  viewerEl.querySelector('.vw-title').innerHTML = `${tagDot(e)}${esc(e.name)}`;
+  viewerEl.querySelector('.vw-title').innerHTML = `${tagDot(e)}${esc(e.name)} ${ratingBadge(e)}`;
   viewerEl.querySelector('.vw-count').textContent = `${vw.i + 1} / ${vw.list.length}`;
   viewerEl.querySelector('.vw-info').hidden = !vw.info;
   viewerEl.querySelector('[data-v="info"]').classList.toggle('on', vw.info);
@@ -721,6 +688,7 @@ viewerEl.addEventListener('click', async (ev) => {
     case 'info': vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); break;
     case 'keep': viewerTag('vert', true); break;
     case 'tag': tagMenu([vw.list[vw.i].path]); break;
+    case 'rate': ratingMenu([vw.list[vw.i].path]); break;
     case 'trash': viewerTrash(); break;
     case 'ckeep': setTag([vw.list[k].path], 'vert'); b.textContent = '✓ Gardée'; break;
     case 'ctrash': {
@@ -757,7 +725,8 @@ document.addEventListener('keydown', (ev) => {
   ev.preventDefault();
   if (ev.key === 'Escape') { if (!els.menu.hidden) hideMenu(); else closeViewer(); return; }
   if (vw.mode !== 'single') return;
-  if (ev.key === 'ArrowRight' || ev.key === ' ') viewerGo(1);
+  if (ev.altKey && /^[0-5]$/.test(ev.key)) setRating([vw.list[vw.i].path], +ev.key);
+  else if (ev.key === 'ArrowRight' || ev.key === ' ') viewerGo(1);
   else if (ev.key === 'ArrowLeft') viewerGo(-1);
   else if (ev.key === 'ArrowDown' || ev.key === 'PageDown') viewerGo(1);
   else if (ev.key === 'ArrowUp' || ev.key === 'PageUp' || ev.key === 'Backspace') viewerGo(-1);
@@ -899,6 +868,7 @@ async function openDuplicates(path) {
 /* ----- Renommage en lot ----- */
 
 function openBatchRename() {
+  if (blockedVirtual()) return;
   const sel = selectedEntries();
   if (sel.length < 2) { renameSelection(); return; }
   const st = { mode: 'num', base: 'Image', start: 1, pad: 3, sep: '_', find: '', repl: '', caseMode: 'lower', keepExt: true };
@@ -973,6 +943,10 @@ function openBatchRename() {
     try {
       const out = await invoke('rename_batch', { pairs });
       pairs.forEach(([from], k) => moveTag(from, out[k]));
+      pushUndo(`Renommage en lot (${out.length})`, async () => {
+        await invoke('rename_batch', { pairs: out.map((np, k) => [np, basename(pairs[k][0])]) });
+        out.forEach((np, k) => moveTag(np, pairs[k][0]));
+      });
       tab.selected = new Set(out);
       closeModal();
       toast(`${plural(out.length, 'élément')} renommé${out.length > 1 ? 's' : ''}`);
@@ -1247,7 +1221,7 @@ document.addEventListener('keydown', (ev) => {
 /* ---------------- Démarrage ---------------- */
 
 function featuresInit() {
-  els.search.placeholder = 'Rechercher… (p: prompt · tag: couleur)';
+  els.search.placeholder = 'Rechercher… (type:image note:4 p:prompt)';
   $('btn-options').insertAdjacentHTML('beforebegin', '<button class="nav-item update-btn" id="update-btn" hidden></button><button class="nav-item net-btn" id="net-btn" hidden></button>');
   $('update-btn').onclick = installUpdate;
   // Vérification discrète des mises à jour (fenêtre principale, puis toutes les 6 h)

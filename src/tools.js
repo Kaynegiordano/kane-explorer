@@ -58,6 +58,7 @@ async function shelfPaste(cut) {
   try {
     const created = await invoke('paste', { paths, dest: tab.path, cut });
     toast(`${plural(created.length, 'élément')} ${cut ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} ici`);
+    recordPaste(paths, created, cut, cut ? 'Déplacement depuis l’étagère' : 'Copie depuis l’étagère');
     if (cut) { kShelf = []; saveShelf(); }
     await refresh();
     if (created.length) { tab.selected = new Set(created); paintSelection(); }
@@ -162,7 +163,7 @@ function organizeCandidates() {
 }
 
 function openOrganize() {
-  if (tab.path === HOME) return;
+  if (tab.path === HOME || blockedVirtual()) return;
   const files = organizeCandidates();
   if (!files.length) { toast('Aucun fichier à ranger ici', 'error'); return; }
   const chosen = selectedEntries().some((e) => !e.is_dir);
@@ -216,6 +217,7 @@ function openOrganize() {
       catch (e) { closeModal(); toast(cleanError(e), 'error'); return; }
       const folders = [...new Set(res.done.map(([, to]) => parentOf(to)))];
       store.set('lastOrganize', res.done.length ? { dir, done: res.done, folders } : null);
+      if (res.done.length) pushUndo(`Rangement (${plural(res.done.length, 'fichier')})`, undoOrganize);
       modalBox.innerHTML = `<h2>Rangement terminé</h2>
         <p class="lead">${plural(res.done.length, 'fichier')} rangé${res.done.length > 1 ? 's' : ''} dans ${plural(folders.length, 'dossier')}.` +
         `${res.failed.length ? ` ${plural(res.failed.length, 'fichier')} n’${res.failed.length > 1 ? 'ont' : 'a'} pas pu être déplacé${res.failed.length > 1 ? 's' : ''}.` : ''}</p>
@@ -250,11 +252,12 @@ const NEW_FILE_CONTENT = {
 };
 
 async function newFile() {
-  if (tab.path === HOME) return;
+  if (tab.path === HOME || blockedVirtual()) return;
   const name = await promptDialog('Nouveau fichier (avec son extension)', 'Nouveau fichier.txt');
   if (!name) return;
   try {
     const path = await invoke('create_file', { parent: tab.path, name, content: NEW_FILE_CONTENT[extOf(name)] || '' });
+    pushUndo(`Nouveau fichier « ${basename(path)} »`, () => undoCreate([path]));
     await refresh(true);
     selectPath(path);
     toast(`« ${basename(path)} » créé`);
@@ -262,12 +265,14 @@ async function newFile() {
 }
 
 async function zipSelection(sel) {
+  if (blockedVirtual()) return;
   const first = sel[0];
   const name = sel.length === 1 ? `${first.is_dir ? first.name : first.name.replace(/\.[^.]+$/, '')}.zip` : 'Archive.zip';
   const slow = setTimeout(() => toast('Compression en cours…'), 500);
   try {
     const out = await invoke('zip_paths', { paths: sel.map((e) => e.path), zipName: name });
     toast(`« ${basename(out)} » créé`);
+    pushUndo(`Compression « ${basename(out)} »`, () => undoCreate([out]));
     await refresh(true);
     selectPath(out);
   } catch (e) { toast(cleanError(e), 'error'); }
@@ -280,6 +285,7 @@ async function extractHere(e) {
   try {
     const out = await invoke('unzip_here', { archive: e.path });
     toast(`Extrait dans « ${basename(out)} »`);
+    pushUndo(`Extraction dans « ${basename(out)} »`, () => undoCreate([out]));
     await refresh(true);
     selectPath(out);
   } catch (err) { toast(cleanError(err), 'error'); }
@@ -312,6 +318,7 @@ function pathFormatMenu(paths) {
 
 function toolItemMenu(sel, one) {
   const items = ['-'];
+  if (sel.some((e) => !e.is_dir)) items.push({ label: 'Note…', kbd: 'Alt+1…5', run: () => ratingMenu(sel.filter((e) => !e.is_dir).map((e) => e.path)) });
   items.push({ label: sel.length > 1 ? `Ajouter ${sel.length} éléments à l’étagère` : 'Ajouter à l’étagère', run: () => shelfAdd(sel.map((e) => ({ path: e.path, isDir: e.is_dir }))) });
   items.push({ label: 'Compresser en ZIP', run: () => zipSelection(sel) });
   if (one && !one.is_dir && EXTRACTABLE.has(one.ext)) items.push({ label: 'Extraire ici', run: () => extractHere(one) });
@@ -326,6 +333,7 @@ function toolBlankMenu() {
     '-',
     { label: 'Nouveau fichier…', run: newFile },
     { label: 'Ranger ce dossier…', disabled: !tab.items.some((e) => !e.is_dir), run: openOrganize },
+    { label: undoLabel() ? `Annuler : ${undoLabel()}` : 'Annuler', kbd: 'Ctrl+Z', disabled: !undoLabel(), run: undoLast },
   ];
   if (last && samePath(last.dir, tab.path)) items.push({ label: `Annuler le dernier rangement (${plural(last.done.length, 'fichier')})`, run: undoOrganize });
   return items;
