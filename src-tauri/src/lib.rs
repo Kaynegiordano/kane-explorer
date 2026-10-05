@@ -96,8 +96,13 @@ fn attributes(_: &fs::Metadata) -> u32 {
 /// Contenu d'un dossier (sans tri : l'interface s'en charge).
 #[tauri::command]
 async fn list_dir(path: String) -> Result<Vec<Entry>, String> {
-    let rd = fs::read_dir(&path).map_err(err)?;
-    let mut out = Vec::new();
+    // Hors du fil asynchrone : un disque réseau ou OneDrive lent ne bloque plus les autres commandes
+    tauri::async_runtime::spawn_blocking(move || list_dir_sync(&path)).await.map_err(err)?
+}
+
+fn list_dir_sync(path: &str) -> Result<Vec<Entry>, String> {
+    let rd = fs::read_dir(path).map_err(err)?;
+    let mut out = Vec::with_capacity(256);
     for e in rd.flatten() {
         let Ok(mut meta) = e.metadata() else { continue };
         let hidden = is_hidden(&meta);
@@ -136,6 +141,23 @@ async fn list_dir(path: String) -> Result<Vec<Entry>, String> {
 #[tauri::command]
 async fn dir_count(path: String) -> Result<usize, String> {
     Ok(fs::read_dir(&path).map_err(err)?.count())
+}
+
+/// État de chemins : 0 = introuvable, 1 = fichier, 2 = dossier (épinglés : éléments disparus, fichier ou dossier).
+#[tauri::command]
+async fn path_states(paths: Vec<String>) -> Result<Vec<u8>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .iter()
+            .map(|p| match fs::metadata(p) {
+                Ok(m) if m.is_dir() => 2,
+                Ok(_) => 1,
+                Err(_) => 0,
+            })
+            .collect()
+    })
+    .await
+    .map_err(err)
 }
 
 /// Début d'un fichier texte pour l'aperçu. `None` si le fichier est binaire.
@@ -654,6 +676,31 @@ async fn scan_prompts(dir: String) -> Result<std::collections::HashMap<String, S
 }
 
 #[tauri::command]
+async fn move_items(moves: Vec<(String, String)>) -> Result<extras::MoveResult, String> {
+    blocking(move || extras::move_items(&moves)).await
+}
+
+#[tauri::command]
+async fn remove_empty_dirs(paths: Vec<String>) -> Result<(), String> {
+    blocking(move || extras::remove_empty_dirs(&paths)).await
+}
+
+#[tauri::command]
+async fn create_file(parent: String, name: String, content: String) -> Result<String, String> {
+    blocking(move || extras::create_file(Path::new(&parent), name.trim(), &content)).await?
+}
+
+#[tauri::command]
+async fn zip_paths(paths: Vec<String>, zip_name: String) -> Result<String, String> {
+    blocking(move || extras::zip_paths(&paths, &zip_name)).await?
+}
+
+#[tauri::command]
+async fn unzip_here(archive: String) -> Result<String, String> {
+    blocking(move || extras::unzip_here(&archive)).await?
+}
+
+#[tauri::command]
 async fn dir_info(path: String) -> Result<extras::DirInfo, String> {
     blocking(move || extras::dir_info(Path::new(&path))).await
 }
@@ -978,6 +1025,12 @@ pub fn run() {
             new_window,
             windows_folder_options,
             dir_count,
+            path_states,
+            move_items,
+            remove_empty_dirs,
+            create_file,
+            zip_paths,
+            unzip_here,
             read_text,
             places,
             drives,

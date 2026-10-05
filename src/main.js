@@ -44,10 +44,11 @@ const prefs = {
   showExt: store.get('showExt', true),
   foldersFirst: store.get('foldersFirst', true),
   confirmDelete: store.get('confirmDelete', false),
+  animations: store.get('animations', true),
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'double', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false,
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true,
 };
 
 // Fenêtre secondaire (ouverte via « nouvelle fenêtre ») : ne touche pas aux onglets mémorisés
@@ -227,8 +228,15 @@ async function navigate(path, { push = true, t = tab, select = null } = {}) {
   return true;
 }
 
+/** Empreinte rapide d'un dossier : noms, tailles, dates et attributs. */
+function entrySignature(entries) {
+  let s = entries.length + '|';
+  for (const e of entries) s += e.path + ':' + e.size + ':' + e.modified + ':' + e.attrs + ';';
+  return s;
+}
+
 /** Recharge le dossier de l'onglet actif en conservant sélection et défilement. */
-async function refresh() {
+async function refresh(force = false) {
   const t = tab;
   if (t.path === HOME) { await loadSidebar(); render(); return true; }
   const id = ++t.loadId;
@@ -236,6 +244,8 @@ async function refresh() {
   try { entries = prepare(await invoke('list_dir', { path: t.path })); }
   catch (e) { if (t === tab) toast(cleanError(e), 'error'); return false; }
   if (id !== t.loadId) return false;
+  // Rien n'a changé (évènement du système sans effet visible) : on évite tout le rendu et les analyses
+  if (force !== true && t.loaded && entrySignature(entries) === entrySignature(t.entries)) return true;
   t.entries = entries;
   t.loaded = true;
   afterLoad(t, true);
@@ -415,6 +425,10 @@ function renderFiles() {
       </div><div class="vbody list" id="vbody"><div class="vwin" id="vwin"></div></div>`;
   }
   layoutWindow();
+  // Petite animation d'entrée, seulement à l'affichage d'un dossier (pas au défilement)
+  const vw = $('vwin');
+  vw.classList.add('enter');
+  setTimeout(() => vw.classList.remove('enter'), 450);
 }
 
 /** Calcule colonnes et hauteur totale de la zone virtualisée. */
@@ -467,12 +481,22 @@ function renderWindow(force) {
   const first = r0 * view.cols;
   const last = Math.min(tab.items.length, r1 * view.cols);
   if (!force && first === view.first && last === view.last) return;
+  const prevFirst = view.first, prevLast = view.last;
   view.first = first;
   view.last = last;
   vwin.style.transform = `translateY(${r0 * view.stride}px)`;
-  let html = '';
-  for (let i = first; i < last; i++) html += itemHtml(tab.items[i], i);
-  vwin.innerHTML = html;
+  const html = (a, b) => {
+    let h = '';
+    for (let i = a; i < b; i++) h += itemHtml(tab.items[i], i);
+    return h;
+  };
+  // Reconstruction complète (changement de données, de mise en page, grand saut de défilement)
+  if (force || prevFirst < 0 || first >= prevLast || last <= prevFirst) { vwin.innerHTML = html(first, last); return; }
+  // Défilement normal : on ne touche qu'aux lignes qui entrent ou sortent (miniatures conservées, pas de rechargement)
+  while (vwin.firstChild && +vwin.firstChild.dataset.i < first) vwin.firstChild.remove();
+  while (vwin.lastChild && +vwin.lastChild.dataset.i >= last) vwin.lastChild.remove();
+  if (first < prevFirst) vwin.insertAdjacentHTML('afterbegin', html(first, Math.min(prevFirst, last)));
+  if (last > prevLast) vwin.insertAdjacentHTML('beforeend', html(Math.max(prevLast, first), last));
 }
 
 let scrollRaf = 0;
@@ -497,7 +521,7 @@ function driveName(d) {
 }
 
 function renderHome() {
-  const places = shared.places.map((p) =>
+  const places = quickPlaces().map((p) =>
     `<button class="card" data-path="${esc(p.path)}">${placeIcon(p)}<div class="info"><div class="title">${esc(p.name)}</div><div class="sub">${esc(p.path)}</div></div></button>`
   ).join('');
   const drives = shared.drives.map((d) => {
@@ -507,7 +531,7 @@ function renderHome() {
         `<div class="sub">${fmtSize(d.free)} libres sur ${fmtSize(d.total)}</div>` : '') +
       `</div></button>`;
   }).join('');
-  els.content.innerHTML = `<div class="home"><h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
+  els.content.innerHTML = `<div class="home">${homePinnedHtml()}<h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
 }
 
 function segments(path) {
@@ -532,10 +556,7 @@ function renderChrome() {
     .join(CHEVRON);
   els.crumbs.scrollLeft = els.crumbs.scrollWidth;
 
-  document.querySelectorAll('.nav-item[data-path]').forEach((b) => {
-    const p = b.dataset.path;
-    b.classList.toggle('active', p === HOME ? tab.path === HOME : tab.path !== HOME && samePath(p, tab.path));
-  });
+  markActive();
 
   els.back.disabled = tab.hIndex <= 0;
   els.forward.disabled = tab.hIndex >= tab.history.length - 1;
@@ -550,6 +571,14 @@ function renderChrome() {
   renderTabs();
   updateActions();
   updateStatus();
+}
+
+/** Met en évidence l'élément de la barre latérale qui correspond au dossier affiché. */
+function markActive() {
+  document.querySelectorAll('.nav-item[data-path]').forEach((b) => {
+    const p = b.dataset.path;
+    b.classList.toggle('active', !b.dataset.file && (p === HOME ? tab.path === HOME : tab.path !== HOME && samePath(p, tab.path)));
+  });
 }
 
 function updateActions() {
@@ -577,14 +606,13 @@ function updateStatus() {
 
 function renderSidebar() {
   renderPinned();
-  els.places.innerHTML = [...shared.places, ...(shared.extra || [])].map((p) =>
-    `<button class="nav-item" data-path="${esc(p.path)}" title="${esc(p.path)}">${placeIcon(p)}<span>${esc(p.name)}</span></button>`
-  ).join('');
+  els.places.innerHTML = quickPlaces().map(quickItemHtml).join('');
   els.drives.innerHTML = shared.drives.map((d) => {
     const used = d.total ? (d.total - d.free) / d.total : 0;
     return `<button class="nav-item" data-path="${esc(d.path)}" title="${d.total ? `${fmtSize(d.free)} libres sur ${fmtSize(d.total)}` : ''}">${ICON_DRIVE}<span>${esc(driveName(d))}</span>` +
       (d.total ? `<span class="mini-bar"><i style="width:${(used * 100).toFixed(1)}%"></i></span>` : '') + '</button>';
   }).join('');
+  if (tab) markActive();
 }
 
 async function loadSidebar() {
@@ -668,6 +696,12 @@ async function openEntry(e) {
   }
   try { await invoke('open_path', { path: e.path }); }
   catch (err) { toast(cleanError(err), 'error'); }
+}
+
+/** Carte de l'accueil : un dossier s'ouvre dans Kane, un fichier épinglé avec son application. */
+function openCard(card) {
+  if (card.dataset.file) invoke('open_path', { path: card.dataset.path }).catch((e) => toast(cleanError(e), 'error'));
+  else navigate(card.dataset.path);
 }
 
 function openSelection() {
@@ -1069,7 +1103,7 @@ function showMenu(x, y, entries) {
   // L'aperçu natif est une fenêtre Windows : on le masque pour ne pas couvrir le menu
   if (nativeOpen) invoke('native_preview_visible', { visible: false }).catch(() => {});
   els.menu.hidden = false;
-  const r = els.menu.getBoundingClientRect();
+  const r = { width: els.menu.offsetWidth, height: els.menu.offsetHeight }; // insensible à l'animation d'apparition
   els.menu.style.left = Math.max(4, Math.min(x, innerWidth - r.width - 6)) + 'px';
   els.menu.style.top = Math.max(4, Math.min(y, innerHeight - r.height - 6)) + 'px';
   els.menu.onclick = (ev) => {
@@ -1117,7 +1151,7 @@ function blankMenu() {
     { label: 'Affichage : liste', kbd: 'Ctrl+1', run: () => setView('list') },
     { label: 'Affichage : grandes icônes', kbd: 'Ctrl+2', run: () => setView('grid') },
     { label: (prefs.showHidden ? '✓ ' : '') + 'Éléments masqués', kbd: 'Ctrl+H', run: toggleHidden },
-    { label: 'Actualiser', kbd: 'F5', run: refresh },
+    { label: 'Actualiser', kbd: 'F5', run: () => refresh(true) },
     '-',
     { label: 'Ouvrir dans le Terminal', run: () => openTerminal() },
     { label: "Ouvrir dans l'Explorateur Windows", run: () => winCall('open_in_windows_explorer', { path: tab.path }) },
@@ -1142,7 +1176,7 @@ els.content.addEventListener('click', (ev) => {
   }
   const card = ev.target.closest('.card');
   if (card) {
-    if (prefs.clickMode === 'single') navigate(card.dataset.path);
+    if (prefs.clickMode === 'single') openCard(card);
     else selectCard(card);
     return;
   }
@@ -1163,7 +1197,7 @@ els.content.addEventListener('click', (ev) => {
 els.content.addEventListener('dblclick', (ev) => {
   if (prefs.clickMode === 'single') return;
   const card = ev.target.closest('.card');
-  if (card) { navigate(card.dataset.path); return; }
+  if (card) { openCard(card); return; }
   const it = ev.target.closest('.item');
   if (it) openEntry(tab.items[+it.dataset.i]);
 });
@@ -1193,6 +1227,127 @@ els.content.addEventListener('pointermove', (ev) => {
     .finally(() => { hideDragBar(); setTimeout(() => { suppressClick = false; }, 100); });
 });
 
+/* ----- Sélection par rectangle (« lasso ») ----- */
+
+// Démarre sur le vide (sous la liste, entre les tuiles, marge d'une tuile) ; Ctrl/Maj ajoutent à la sélection.
+// Calcul purement géométrique (pas de DOM) : fonctionne avec l'affichage virtualisé, même à 100 000 éléments.
+let lasso = null;
+
+function lassoStartAllowed(ev) {
+  if (ev.button !== 0 || tab.path === HOME || renaming || !$('vbody')) return false;
+  const c = els.content;
+  const r = c.getBoundingClientRect();
+  if (ev.clientX >= r.left + c.clientWidth || ev.clientY >= r.top + c.clientHeight) return false; // ascenseur
+  const t = ev.target;
+  if (t.closest('.list-head, .rename-input')) return false;
+  const it = t.closest('.item');
+  return !it || (it.classList.contains('tile') && t === it); // marge d'une tuile = vide
+}
+
+/** Indices des éléments touchés par le rectangle (x1,y1)-(x2,y2), en coordonnées locales à #vbody. */
+function lassoHits(x1, y1, x2, y2) {
+  const vbody = $('vbody');
+  const n = tab.items.length;
+  const { cols, stride } = view;
+  const hits = [];
+  if (!n || x2 < 0 || x1 > vbody.clientWidth) return hits;
+  const r0 = Math.max(0, Math.floor(y1 / stride));
+  const r1 = Math.min(Math.ceil(n / cols) - 1, Math.floor(y2 / stride));
+  if (prefs.view === 'list') {
+    for (let r = r0; r <= r1; r++) if (y2 >= r * stride && y1 <= r * stride + ROW_H) hits.push(r);
+    return hits;
+  }
+  const cellW = (vbody.clientWidth - (cols - 1) * GAP) / cols;
+  const pitch = cellW + GAP;
+  const c0 = Math.max(0, Math.floor((x1 - cellW) / pitch) + 1);
+  const c1 = Math.min(cols - 1, Math.floor(x2 / pitch));
+  for (let r = r0; r <= r1; r++) {
+    if (y2 < r * stride || y1 > r * stride + TILE_H) continue;
+    for (let c = c0; c <= c1; c++) {
+      const i = r * cols + c;
+      if (i < n && x2 >= c * pitch && x1 <= c * pitch + cellW) hits.push(i);
+    }
+  }
+  return hits;
+}
+
+function lassoUpdate() {
+  const l = lasso;
+  const vbody = $('vbody');
+  if (!l || !vbody) return;
+  const cr = els.content.getBoundingClientRect();
+  const vr = vbody.getBoundingClientRect();
+  const px = Math.max(cr.left, Math.min(l.px, cr.left + els.content.clientWidth));
+  const py = Math.max(cr.top, Math.min(l.py, cr.bottom));
+  const ex = px - vr.left, ey = py - vr.top;
+  const [x1, x2] = l.sx < ex ? [l.sx, ex] : [ex, l.sx];
+  const [y1, y2] = l.sy < ey ? [l.sy, ey] : [ey, l.sy];
+  // Rectangle visible (clippé à la zone de contenu)
+  const el = l.el;
+  const left = Math.max(cr.left, vr.left + x1), right = Math.min(cr.left + els.content.clientWidth, vr.left + x2);
+  const top = Math.max(cr.top, vr.top + y1), bottom = Math.min(cr.bottom, vr.top + y2);
+  el.style.cssText = `left:${left}px;top:${top}px;width:${Math.max(0, right - left)}px;height:${Math.max(0, bottom - top)}px`;
+  // Éléments touchés
+  const idx = lassoHits(x1, y1, x2, y2);
+  const key = idx.length ? `${idx[0]}-${idx[idx.length - 1]}-${idx.length}` : '';
+  if (key === l.key) return;
+  l.key = key;
+  const sel = new Set(l.base);
+  for (const i of idx) sel.add(tab.items[i].path);
+  tab.selected = sel;
+  tab.anchor = tab.focus = idx.length ? idx[idx.length - 1] : -1;
+  paintSelection();
+}
+
+function lassoTick() {
+  const l = lasso;
+  if (!l) return;
+  const cr = els.content.getBoundingClientRect();
+  const edge = 36;
+  let dy = 0;
+  if (l.py < cr.top + edge) dy = -Math.ceil((cr.top + edge - l.py) / 3);
+  else if (l.py > cr.bottom - edge) dy = Math.ceil((l.py - (cr.bottom - edge)) / 3);
+  if (dy) { els.content.scrollTop += Math.max(-40, Math.min(40, dy)); renderWindow(false); lassoUpdate(); }
+  l.raf = requestAnimationFrame(lassoTick);
+}
+
+function lassoEnd() {
+  if (!lasso) return;
+  cancelAnimationFrame(lasso.raf);
+  lasso.el.remove();
+  if (lasso.active) { suppressClick = true; setTimeout(() => { suppressClick = false; }, 100); }
+  lasso = null;
+}
+
+els.content.addEventListener('pointerdown', (ev) => {
+  if (!lassoStartAllowed(ev)) return;
+  dragStart = null; // pas de glisser-déposer de fichiers depuis le vide d'une tuile
+  const vr = $('vbody').getBoundingClientRect();
+  lasso = {
+    sx: ev.clientX - vr.left, sy: ev.clientY - vr.top, px: ev.clientX, py: ev.clientY,
+    base: ev.ctrlKey || ev.shiftKey ? new Set(tab.selected) : new Set(),
+    x0: ev.clientX, y0: ev.clientY, active: false, key: null, raf: 0, el: null, id: ev.pointerId,
+  };
+  els.content.focus({ preventScroll: true });
+});
+els.content.addEventListener('pointermove', (ev) => {
+  const l = lasso;
+  if (!l) return;
+  if (!(ev.buttons & 1)) { lassoEnd(); return; }
+  l.px = ev.clientX; l.py = ev.clientY;
+  if (!l.active) {
+    if (Math.abs(ev.clientX - l.x0) + Math.abs(ev.clientY - l.y0) < 5) return;
+    l.active = true;
+    l.el = document.body.appendChild(Object.assign(document.createElement('div'), { className: 'lasso' }));
+    els.content.setPointerCapture(l.id);
+    l.raf = requestAnimationFrame(lassoTick);
+  }
+  lassoUpdate();
+});
+els.content.addEventListener('pointerup', lassoEnd);
+els.content.addEventListener('pointercancel', lassoEnd);
+els.content.addEventListener('lostpointercapture', lassoEnd);
+
 // Arrivée : fichiers lâchés sur Kane (depuis Kane lui-même ou depuis l'extérieur)
 let dropEl = null;
 
@@ -1203,9 +1358,14 @@ function dropTargetAt(x, y) {
   const it = el.closest('#content .item');
   if (it && tab.items[+it.dataset.i]?.is_dir) return pick(it, tab.items[+it.dataset.i].path);
   const card = el.closest('.card');
-  if (card) return pick(card, card.dataset.path);
+  if (card) return card.dataset.file ? null : pick(card, card.dataset.path);
   const nav = el.closest('.nav-item');
+  if (nav?.dataset.file) return null; // épingle de fichier : on ne dépose rien dedans
   if (nav) return pick(nav, nav.dataset.path);
+  const sz = el.closest('[data-shelf-zone]');
+  if (sz) return { el: sz, path: SHELF_ZONE }; // déposer sur l'étagère = l'y ajouter
+  const pz = el.closest('[data-pin-zone]');
+  if (pz) return { el: pz, path: PIN_ZONE }; // déposer sur « Épinglés » = épingler
   const crumb = el.closest('.crumb');
   if (crumb) return pick(crumb, crumb.dataset.path);
   const t = el.closest('.tab');
@@ -1225,6 +1385,8 @@ function markDrop(target) {
 /** Comme l'Explorateur : déplacer sur le même disque, copier ailleurs. Ctrl = copier, Maj = déplacer. */
 async function dropInto(paths, dest) {
   if (!paths?.length) return;
+  if (dest === PIN_ZONE) return pinDropped(paths);
+  if (dest === SHELF_ZONE) return shelfDropped(paths);
   const mods = await invoke('key_state').catch(() => ({ ctrl: false, shift: false }));
   const drive = (p) => p.slice(0, 2).toLowerCase();
   const move = mods.ctrl ? false : mods.shift ? true : paths.every((p) => drive(p) === drive(dest));
@@ -1265,9 +1427,9 @@ els.content.addEventListener('contextmenu', (ev) => {
     const p = card.dataset.path;
     if (ev.shiftKey) { shellMenu([p]); return; }
     showMenu(ev.clientX, ev.clientY, [
-      { label: 'Ouvrir', run: () => navigate(p) },
-      { label: 'Ouvrir dans un nouvel onglet', run: () => newTab(p, { activate: false }) },
-      { label: 'Ouvrir dans le Terminal', run: () => openTerminal(p) },
+      { label: 'Ouvrir', run: () => openCard(card) },
+      !card.dataset.file && { label: 'Ouvrir dans un nouvel onglet', run: () => newTab(p, { activate: false }) },
+      !card.dataset.file && { label: 'Ouvrir dans le Terminal', run: () => openTerminal(p) },
       { label: 'Copier le chemin', run: () => copyPaths([p]) },
       '-',
       { label: 'Propriétés', run: () => showProperties([p]) },
@@ -1323,7 +1485,7 @@ sidebar.addEventListener('contextmenu', (ev) => {
 els.back.onclick = goBack;
 els.forward.onclick = goForward;
 els.up.onclick = goUp;
-els.refresh.onclick = refresh;
+els.refresh.onclick = () => refresh(true);
 els.newFolder.onclick = doNewFolder;
 els.cut.onclick = () => doCopy(true);
 els.copy.onclick = () => doCopy(false);
@@ -1387,7 +1549,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.ctrlKey && k === 'f') { ev.preventDefault(); els.search.focus(); els.search.select(); return; }
   if ((ev.ctrlKey && k === 'l') || (ev.altKey && k === 'd')) { ev.preventDefault(); editAddress(); return; }
   if (ev.altKey && k === 'p') { ev.preventDefault(); togglePreview(); return; }
-  if (ev.key === 'F5') { ev.preventDefault(); refresh(); return; }
+  if (ev.key === 'F5') { ev.preventDefault(); refresh(true); return; }
   if (ev.altKey && ev.key === 'ArrowLeft') { ev.preventDefault(); goBack(); return; }
   if (ev.altKey && ev.key === 'ArrowRight') { ev.preventDefault(); goForward(); return; }
   if (ev.altKey && ev.key === 'ArrowUp') { ev.preventDefault(); goUp(); return; }
@@ -1515,6 +1677,10 @@ function openOptions() {
       <div class="row-inline"><input type="text" name="startPath" value="${esc(prefs.startPath)}" placeholder="C:\\Users\\…" spellcheck="false">
         <button class="btn" data-act="current">Dossier actuel</button></div>
     </fieldset>
+    <fieldset><legend>Accès rapide</legend>
+      <p class="lead">Choisissez les raccourcis de la barre latérale et de l'accueil.</p>
+      <button class="btn" data-act="quick">Personnaliser l'accès rapide…</button>
+    </fieldset>
     <fieldset><legend>Mises à jour</legend>
       <p class="lead" id="update-status">Kane Explorer vérifie automatiquement les nouvelles versions publiées sur GitHub.</p>
       <button class="btn" data-act="update">Rechercher des mises à jour</button>
@@ -1529,6 +1695,7 @@ function openOptions() {
       ${check('showProtected', 'Afficher les fichiers protégés du système d\u2019exploitation')}
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
+      ${check('animations', 'Animations de l’interface')}
     </fieldset>
     <div class="foot">
       <button class="link" data-act="windows">Options des dossiers de Windows…</button>
@@ -1540,6 +1707,7 @@ function openOptions() {
 
   const apply = () => {
     document.body.classList.toggle('single-click', prefs.clickMode === 'single');
+    document.body.classList.toggle('no-anim', !prefs.animations);
     previewKey = '';
     render();
     renderWindow(true);
@@ -1555,6 +1723,7 @@ function openOptions() {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') closeModal();
     else if (act === 'windows') winCall('windows_folder_options');
+    else if (act === 'quick') { closeModal(); openQuickEditor(); }
     else if (act === 'default') toggleDefaultExplorer();
     else if (act === 'update') {
       const info = await checkForUpdate();
@@ -1607,6 +1776,7 @@ $('btn-options').onclick = openOptions;
 
 window.addEventListener('DOMContentLoaded', async () => {
   document.body.classList.toggle('single-click', prefs.clickMode === 'single');
+  document.body.classList.toggle('no-anim', !prefs.animations);
   await loadSidebar();
   // Dossier de départ selon l'option « Au démarrage » (ou celui demandé par une nouvelle fenêtre)
   const saved = isMainWindow && prefs.startup === 'restore' ? store.get('tabs', null) : null;

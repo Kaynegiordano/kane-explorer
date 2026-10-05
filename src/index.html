@@ -18,10 +18,24 @@
         <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>
         <span>Accueil</span>
       </button>
-      <div class="nav-title" id="pinned-title" hidden>Épinglés</div>
-      <div id="nav-pinned"></div>
+      <div id="pin-zone" data-pin-zone>
+        <div class="nav-title" id="pinned-title">Épinglés</div>
+        <div id="nav-pinned"></div>
+        <div class="nav-hint" id="pin-hint">Glissez ici un dossier ou un fichier pour l’épingler</div>
+      </div>
       <div class="nav-title">Accès rapide</div>
       <div id="nav-places"></div>
+      <div id="shelf-zone" data-shelf-zone>
+        <div class="nav-title">Étagère <span id="shelf-count" class="count"></span></div>
+        <div id="nav-shelf"></div>
+        <div class="nav-hint" id="shelf-hint">Déposez ici des éléments de plusieurs dossiers, puis copiez-les ou déplacez-les d’un coup</div>
+        <div class="shelf-actions" id="shelf-actions" hidden>
+          <button data-shelf="copy" title="Copier tout dans le dossier affiché">Copier ici</button>
+          <button data-shelf="move" title="Déplacer tout dans le dossier affiché">Déplacer ici</button>
+          <button data-shelf="dragall" title="Glisser tout vers un autre logiciel">Glisser</button>
+          <button data-shelf="clear" title="Vider l’étagère">✕</button>
+        </div>
+      </div>
       <div class="nav-title">Lecteurs</div>
       <div id="nav-drives"></div>
     </nav>
@@ -134,5 +148,7 @@
 
   <script src="main.js"></script>
   <script src="features.js"></script>
+  <script src="pins.js"></script>
+  <script src="tools.js"></script>
 </body>
 </html>

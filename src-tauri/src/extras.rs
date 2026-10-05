@@ -786,3 +786,104 @@ pub fn convert(input: &Path, preset: &str, unique: impl Fn(&Path, &str) -> PathB
     }
     Ok(out)
 }
+
+/* ---------------- Ranger (déplacements groupés, annulables), ZIP ---------------- */
+
+#[derive(Serialize, Default)]
+pub struct MoveResult {
+    /// Déplacements réellement effectués : (ancien chemin, nouveau chemin)
+    pub done: Vec<(String, String)>,
+    pub failed: Vec<String>,
+}
+
+/// Nom libre dans `dir` : "photo.png" -> "photo (2).png"
+fn free_name(dir: &Path, name: &str) -> PathBuf {
+    let p = dir.join(name);
+    if !p.exists() {
+        return p;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    (2..).map(|n| dir.join(format!("{stem} ({n}){ext}"))).find(|c| !c.exists()).unwrap()
+}
+
+/// Déplace chaque (source, destination) ; crée les dossiers manquants, ne remplace jamais rien.
+pub fn move_items(moves: &[(String, String)]) -> MoveResult {
+    let mut r = MoveResult::default();
+    for (from, to) in moves {
+        let to = Path::new(to);
+        let (Some(parent), Some(name)) = (to.parent(), to.file_name()) else {
+            r.failed.push(from.clone());
+            continue;
+        };
+        let ok = fs::create_dir_all(parent).is_ok() && {
+            let target = free_name(parent, &name.to_string_lossy());
+            match fs::rename(from, &target) {
+                Ok(()) => {
+                    r.done.push((from.clone(), target.to_string_lossy().into_owned()));
+                    true
+                }
+                Err(_) => false,
+            }
+        };
+        if !ok {
+            r.failed.push(from.clone());
+        }
+    }
+    r
+}
+
+/// Supprime les dossiers vides indiqués (annulation d'un rangement) ; ignore les autres.
+pub fn remove_empty_dirs(paths: &[String]) {
+    for p in paths {
+        let _ = fs::remove_dir(p);
+    }
+}
+
+pub fn create_file(parent: &Path, name: &str, content: &str) -> Result<String, String> {
+    if name.is_empty() || name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+        return Err("Nom invalide. Ces caractères sont interdits : \\ / : * ? \" < > |".into());
+    }
+    let target = free_name(parent, name);
+    fs::write(&target, content).map_err(|e| e.to_string())?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Compresse des éléments d'un même dossier en .zip (tar.exe fourni avec Windows 10/11).
+pub fn zip_paths(paths: &[String], zip_name: &str) -> Result<String, String> {
+    let first = paths.first().ok_or("Rien à compresser")?;
+    let parent = Path::new(first).parent().ok_or("Chemin invalide")?;
+    let target = free_name(parent, zip_name);
+    let mut cmd = quiet("tar");
+    cmd.args(["-a", "-c", "-f"]).arg(&target).arg("-C").arg(parent);
+    for p in paths {
+        let n = Path::new(p).file_name().ok_or("Chemin invalide")?;
+        if Path::new(p).parent() != Some(parent) {
+            return Err("Les éléments doivent se trouver dans le même dossier".into());
+        }
+        cmd.arg(n);
+    }
+    let out = cmd.output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
+    if !out.status.success() {
+        let _ = fs::remove_file(&target);
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Extrait une archive (.zip, .tar, .7z…) dans un nouveau dossier à côté d'elle.
+pub fn unzip_here(archive: &str) -> Result<String, String> {
+    let arch = Path::new(archive);
+    let parent = arch.parent().ok_or("Chemin invalide")?;
+    let stem = arch.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into());
+    let dest = free_name(parent, &stem);
+    fs::create_dir(&dest).map_err(|e| e.to_string())?;
+    let out = quiet("tar").arg("-x").arg("-f").arg(arch).arg("-C").arg(&dest).output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
+    if !out.status.success() {
+        let _ = fs::remove_dir(&dest);
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(dest.to_string_lossy().into_owned())
+}

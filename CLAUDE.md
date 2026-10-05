@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.0.3** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.1.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -43,6 +43,8 @@ Installateur NSIS ~2 Mo, en français.
 | `src/creative.css` | Styles des fonctions avancées (badges, visionneuse, analyse disque, glisser, réseau…) |
 | `src/main.js` | Cœur : état (`prefs`, `tabs`, `tab`, `shared`), navigation, affichage **virtualisé**, aperçu, menus, clavier, options |
 | `src/features.js` | Fonctions avancées, chargé **après** main.js (scripts classiques partageant la portée globale) |
+| `src/pins.js` | Épinglés (dossiers, fichiers, lecteurs ; glisser pour réordonner ; renommer), Accès rapide personnalisable (masquer, renommer, réordonner), boîte `promptDialog` |
+| `src/tools.js` | Outils : Étagère, Ranger (tri annulable), Nouveau fichier, ZIP/Extraire, « Copier le chemin sous forme de… » |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
 | `src-tauri/src/extras.rs` | Métadonnées IA, projets/Git, Wallpaper Engine, analyse disque, doublons, renommage, ffmpeg, réseau |
@@ -59,11 +61,30 @@ Installateur NSIS ~2 Mo, en français.
 (pour que features.js soit chargé). Pour modifier main.js en masse, utiliser de petits scripts Node
 (remplacements exacts) : c'est ce qui a été fait (voir §9).
 
+Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js`. `features.js` appelle `toolItemMenu` /
+`toolBlankMenu` (tools.js) et `togglePins` / `pinMany` / `unpinFolder` (pins.js) ; `main.js` appelle `quickPlaces`,
+`quickItemHtml`, `homePinnedHtml`, `pinDropped`, `shelfDropped`, `PIN_ZONE`, `SHELF_ZONE`, `openQuickEditor`.
+
 ### Points clés de l'interface
 - **Affichage virtualisé** (`renderWindow`) : seules les lignes visibles sont dans le DOM (ROW_H 34, TILE 112×128).
 - Un onglet = `{path, entries, items, history, hIndex, selected:Set, focus, anchor, filter, sub, info, git, prompts…}`.
 - Préférences dans `localStorage` (`kane.*`) ; onglets mémorisés seulement par la fenêtre principale.
 - Fenêtres secondaires : `window.__KANE_START__` injecté par `open_window` (lib.rs).
+- **Rendu incrémental** (`renderWindow`) : au défilement, seules les lignes qui entrent/sortent sont ajoutées/retirées
+  (reconstruction complète seulement si `force`, grand saut ou changement de mise en page).
+- **`refresh(force)`** ignore le rechargement si l'empreinte du dossier (`entrySignature`) n'a pas changé ;
+  F5, le bouton et « Actualiser » passent `true`.
+- **Sélection par rectangle** (« lasso », fin de la section glisser-déposer de main.js) : démarre sur le vide
+  (sous la liste, entre les tuiles, marge d'une tuile), calcul géométrique par indices (pas de DOM), défilement
+  automatique, Ctrl/Maj ajoutent.
+- **Déposer sur la barre latérale** : zone « Épinglés » (`data-pin-zone`) = épingler, zone « Étagère »
+  (`data-shelf-zone`) = ajouter à l'étagère ; sur un dossier épinglé/raccourci = y déplacer/copier.
+- **Données** : `kane.pinned` `[{path,name,file?}]`, `kane.quick` `{hidden,order,names}` (clés = chemin en minuscules),
+  `kane.shelf` `[{path,dir}]`, `kane.lastOrganize` (annulation de « Ranger »), `kane.animations`. Synchronisées entre
+  fenêtres par l'évènement `storage`.
+- **Animations** : `creative.css` (fin du fichier), désactivables (Options → Animations = classe `body.no-anim`) et
+  coupées si Windows demande de réduire les animations. Ne pas animer ce qui est reconstruit à chaque rendu (onglets,
+  aperçu : clignotement).
 
 ## 5. Intégration Windows (où et comment)
 
@@ -124,6 +145,15 @@ Installateur NSIS ~2 Mo, en français.
 | 1.0.1 | Canal de mise à jour signé (GitHub Releases), bascule réseau par carte + détection des branchements, 1re publication |
 | 1.0.2 | Nouveau logo (dossier + K, sans fond) |
 | 1.0.3 | Noms traduits (« Captures d'écran »), raccourci Captures d'écran, règle des éléments cachés comme l'Explorateur, bouton réseau toujours visible, bouton de mise à jour vide corrigé |
+| 1.1.0 | Sélection par rectangle, rendu plus rapide, épinglés de tout type, accès rapide personnalisable, animations, outils (Étagère, Ranger, Nouveau fichier, ZIP, formats de chemin) |
+
+**1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
+hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
+renommables, dépôt sur « Épinglés » ; accès rapide personnalisable (Options → Accès rapide) ; animations modernes
+(option) ; outils : Étagère, Ranger (par mois/jour/type/extension, annulable), Nouveau fichier, Compresser en ZIP /
+Extraire (via `tar.exe` de Windows), « Copier le chemin sous forme de… » (WSL, file:///, guillemets…) ; menus
+défilables si plus hauts que la fenêtre. Nouvelles commandes Rust : `path_states`, `move_items`, `remove_empty_dirs`,
+`create_file`, `zip_paths`, `unzip_here`.
 
 ## 8. Ce qui n'a pas été testé en conditions réelles
 
@@ -154,9 +184,19 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 - Sélecteurs `.nav-item` : les boutons Options/Réseau/Mise à jour n'ont pas de `data-path` → toujours utiliser
   `.nav-item[data-path]` pour la navigation (un oubli avait cassé l'affichage en 0.3).
 - WebView2 dessine au-dessus des fenêtres enfants Win32 → utiliser des popups détenues.
+- **Tester l'interface sans toucher au Kane installé** (instance unique) : lancer
+  `$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS="--remote-debugging-port=9222"; npx tauri dev --config '{"identifier":"com.kane.explorer.dev"}'`
+  (identifiant distinct = pas de conflit et `localStorage` isolé). Puis un script Node 24 (WebSocket intégré) se
+  connecte à `http://127.0.0.1:9222/json` et pilote la page : `Runtime.evaluate` (appeler `navigate(...)`, `openOrganize()`…),
+  `Input.dispatchMouseEvent` (vrais glissers), `Page.captureScreenshot`. Recharger la page (`location.reload()`) après
+  une modification de `src/` ; le Rust se recompile tout seul. Ne pas `await` une fonction qui attend une boîte de dialogue.
+- **Outil Bash** : les antislashs sont altérés dans les heredocs (`'\\'` devient `'\'`) → écrire le Rust/JS contenant
+  des antislashs avec l'outil Write/Edit, jamais avec `cat <<EOF`.
+- Un `<legend>` de `.modal fieldset` est flottant : tout contenu qui n'est pas un `label.opt` doit avoir `clear: both`.
+- Mesurer un élément animé avec `offsetWidth/offsetHeight`, pas `getBoundingClientRect` (l'échelle de l'animation fausse la mesure).
 
 ## 10. Idées non réalisées / prochaines étapes possibles
 
-Classement des enregistrements OBS par jeu, dossier de sorties Forge détecté automatiquement (non trouvé chez
+(« Ranger » couvre déjà le tri par date/type ; un classement OBS par jeu reste possible.) Classement des enregistrements OBS par jeu, dossier de sorties Forge détecté automatiquement (non trouvé chez
 l'utilisateur : à épingler), Ctrl+Z (annulation via la pile de l'Explorateur), licence (MIT ?), vérification de
 signature de code Windows (SmartScreen), tests automatisés de l'interface.

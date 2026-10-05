@@ -8,7 +8,6 @@
 const TAG_COLORS = { rouge: '#ef4444', orange: '#f97316', jaune: '#eab308', vert: '#22c55e', bleu: '#3b82f6', violet: '#a855f7' };
 const TAG_NAMES = Object.keys(TAG_COLORS);
 let kTags = store.get('tags', {});        // chemin (minuscules) -> couleur
-let kPinned = store.get('pinned', []);    // [{ path, name }]
 let kTools = { ffmpeg: false, git: false, code: false };
 let netAdapters = [];
 let lastMouse = { x: 200, y: 200 };
@@ -107,46 +106,6 @@ function tagMenu(paths) {
     { label: 'Aucune étiquette', kbd: '0', run: () => setTag(paths, null) },
   ]);
 }
-
-/* ---------------- Épinglés ---------------- */
-
-const isPinned = (p) => kPinned.some((x) => samePath(x.path, p));
-
-function pinFolder(p) {
-  if (isPinned(p)) return;
-  kPinned.push({ path: p, name: basename(p) || p });
-  store.set('pinned', kPinned);
-  renderSidebar();
-  toast(`« ${basename(p) || p} » épinglé`);
-}
-
-function unpinFolder(p) {
-  kPinned = kPinned.filter((x) => !samePath(x.path, p));
-  store.set('pinned', kPinned);
-  renderSidebar();
-}
-
-function renderPinned() {
-  const box = $('nav-pinned');
-  $('pinned-title').hidden = !kPinned.length;
-  box.innerHTML = kPinned.map((p) =>
-    `<button class="nav-item" data-path="${esc(p.path)}" title="${esc(p.path)}">${ICON_FOLDER}<span>${esc(p.name)}</span></button>`
-  ).join('');
-}
-
-// Menu des épinglés (prioritaire sur le menu générique de la barre latérale)
-$('nav-pinned').addEventListener('contextmenu', (ev) => {
-  const b = ev.target.closest('.nav-item');
-  if (!b) return;
-  ev.preventDefault();
-  ev.stopPropagation();
-  const p = b.dataset.path;
-  showMenu(ev.clientX, ev.clientY, [
-    { label: 'Ouvrir dans un nouvel onglet', run: () => newTab(p, { activate: false }) },
-    { label: 'Ouvrir dans le Terminal', run: () => openTerminal(p) },
-    { label: 'Désépingler', run: () => unpinFolder(p) },
-  ]);
-}, true);
 
 /* ---------------- Après chargement d'un dossier ---------------- */
 
@@ -346,7 +305,7 @@ function extraActions(e) {
   if (isViewable(e)) h += '<button data-pv="viewer">Visionneuse</button>';
   if (IMG_VIEW.has(e.ext)) h += '<button data-pv="wallpaper">Fond d’écran</button>';
   if ((e.is_dir || e.kind === 'code') && kTools.code) h += '<button data-pv="code">VS Code</button>';
-  if (e.is_dir) h += `<button data-pv="pin">${isPinned(e.path) ? 'Désépingler' : 'Épingler'}</button>`;
+  h += `<button data-pv="pin">${isPinned(e.path) ? 'Désépingler' : 'Épingler'}</button>`;
   const cloud = cloudState(e);
   if (cloud === 'online' || (e.is_dir && inOneDrive(e.path) && cloud !== 'pinned')) h += '<button data-pv="od-keep">Conserver sur cet appareil</button>';
   if (cloud === 'local' || cloud === 'pinned') h += '<button data-pv="od-free">Libérer de l’espace</button>';
@@ -423,7 +382,7 @@ function previewAction(a, e, btn) {
     case 'tag': tagMenu(selectedPaths()); break;
     case 'wallpaper': setWallpaper(e); break;
     case 'code': openCode(e.path); break;
-    case 'pin': isPinned(e.path) ? unpinFolder(e.path) : pinFolder(e.path); btn.textContent = isPinned(e.path) ? 'Désépingler' : 'Épingler'; break;
+    case 'pin': togglePins([e]); btn.textContent = isPinned(e.path) ? 'Désépingler' : 'Épingler'; break;
     case 'od-keep': oneDriveSet([e.path], true); break;
     case 'od-free': oneDriveSet([e.path], false); break;
     case 'copy-prompt': copyText(pvAI?.prompt || '', 'Prompt copié'); break;
@@ -502,9 +461,12 @@ function featureItemMenu(sel, one) {
     for (const [preset, label] of CONVERSIONS[[...kinds][0]]) items.push({ label: kTools.ffmpeg ? label : `${label} (ffmpeg requis)`, run: () => convertFiles(sel, preset) });
   }
   if (one?.is_dir || one?.kind === 'code') items.push({ label: 'Ouvrir dans VS Code', disabled: !kTools.code, run: () => openCode(one.path) });
+  if (sel.length) {
+    const all = sel.every((e) => isPinned(e.path));
+    items.push({ label: all ? 'Désépingler de la barre latérale' : sel.length > 1 ? `Épingler ${sel.length} éléments` : 'Épingler dans la barre latérale', run: () => togglePins(sel) });
+  }
   if (one?.is_dir) {
     items.push(
-      { label: isPinned(one.path) ? 'Désépingler de la barre latérale' : 'Épingler dans la barre latérale', run: () => (isPinned(one.path) ? unpinFolder(one.path) : pinFolder(one.path)) },
       { label: 'Analyser l’espace', run: () => openDiskUsage(one.path) },
       { label: 'Rechercher les doublons', run: () => openDuplicates(one.path) },
     );
@@ -518,6 +480,7 @@ function featureItemMenu(sel, one) {
   }
   items.push({ label: 'Étiquette de couleur…', run: () => tagMenu(sel.map((e) => e.path)) });
   if (sel.length > 1) items.push({ label: 'Renommer en lot…', kbd: 'F2', run: openBatchRename });
+  items.push(...toolItemMenu(sel, one));
   return items;
 }
 
@@ -530,18 +493,26 @@ function featureBlankMenu() {
     { label: 'Analyser l’espace de ce dossier', run: () => openDiskUsage(p) },
     { label: 'Rechercher les doublons ici', run: () => openDuplicates(p) },
     { label: 'Ouvrir dans VS Code', disabled: !kTools.code, run: () => openCode(p) },
+    ...toolBlankMenu(),
   ];
 }
 
-// Cartes de l'accueil (lecteurs) : analyse de l'espace
+// Cartes de l'accueil : analyse de l'espace, épingler / désépingler
 els.content.addEventListener('contextmenu', (ev) => {
   const card = ev.target.closest('.card');
   if (!card || ev.shiftKey) return;
+  const p = card.dataset.path;
+  const pinned = isPinned(p);
   setTimeout(() => {
-    const p = card.dataset.path;
-    els.menu.insertAdjacentHTML('beforeend', '<hr><button data-x="du"><span>Analyser l’espace</span></button><button data-x="pin"><span>Épingler</span></button>');
-    els.menu.querySelector('[data-x="du"]').onclick = (e) => { e.stopPropagation(); hideMenu(); openDiskUsage(p); };
-    els.menu.querySelector('[data-x="pin"]').onclick = (e) => { e.stopPropagation(); hideMenu(); pinFolder(p); };
+    els.menu.insertAdjacentHTML('beforeend',
+      (card.dataset.file ? '' : '<hr><button data-x="du"><span>Analyser l’espace</span></button>') +
+      `<button data-x="pin"><span>${pinned ? 'Désépingler' : 'Épingler'}</span></button>`);
+    const du = els.menu.querySelector('[data-x="du"]');
+    if (du) du.onclick = (e) => { e.stopPropagation(); hideMenu(); openDiskUsage(p); };
+    els.menu.querySelector('[data-x="pin"]').onclick = (e) => {
+      e.stopPropagation(); hideMenu();
+      if (pinned) unpinFolder(p); else pinMany([{ path: p, isDir: !card.dataset.file }]);
+    };
   });
 });
 
@@ -1248,7 +1219,7 @@ document.addEventListener('keydown', (ev) => {
   const cards = [...els.content.querySelectorAll('.card')];
   if (!cards.length) return;
   const cur = cards.findIndex((c) => c.classList.contains('sel'));
-  if (ev.key === 'Enter' && cur >= 0) { ev.preventDefault(); navigate(cards[cur].dataset.path); }
+  if (ev.key === 'Enter' && cur >= 0) { ev.preventDefault(); openCard(cards[cur]); }
   else if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp'].includes(ev.key)) {
     ev.preventDefault();
     const d = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1 : -1;
