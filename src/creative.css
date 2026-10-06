@@ -96,8 +96,18 @@
 .vw-title { font-weight: 600; }
 .vw-count { color: #9aa0ad; }
 .vw-main { flex: 1; display: flex; min-height: 0; position: relative; }
-.vw-stage { flex: 1; display: grid; place-items: center; min-width: 0; padding: 0 56px; }
+.vw-stage { flex: 1; display: grid; place-items: center; min-width: 0; padding: 0 56px; overflow: hidden; }
 .vw-stage img, .vw-stage video { max-width: 100%; max-height: calc(100vh - 110px); object-fit: contain; }
+.vw-stage img { transform-origin: center; transition: transform .12s ease-out; will-change: transform; user-select: none; -webkit-user-drag: none; cursor: zoom-in; }
+.vw-stage.zoomed img { cursor: grab; }
+.vw-stage.panning img { transition: none; cursor: grabbing; }
+body.no-anim .vw-stage img { transition: none; }
+.vw-zoom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 10px; background: rgba(20, 22, 28, .82); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, .1); z-index: 2; }
+.vw-zoom[hidden] { display: none; }
+.vw-zoom button { height: 28px; min-width: 32px; padding: 0 9px; border-radius: 6px; color: #eef0f5; background: transparent; }
+.vw-zoom button:hover { background: rgba(255, 255, 255, .14); }
+.vw-main:has(.vw-info:not([hidden])) .vw-zoom { left: calc(50% - 180px); }
+.vw-pct { min-width: 54px; text-align: center; font-size: 12.5px; font-variant-numeric: tabular-nums; color: #cfd3dc; }
 .vw-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; font-size: 34px; border-radius: 8px; color: #fff; opacity: .5; z-index: 1; }
 .vw-nav:hover { opacity: 1; background: rgba(255, 255, 255, .08); }
 .vw-nav.prev { left: 6px; }

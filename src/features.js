@@ -588,17 +588,120 @@ function openViewer(list, i) {
       <button data-v="trash" class="danger" title="Corbeille (Suppr)">Corbeille</button>
       <button data-v="close" title="Fermer (Échap)">✕</button>
     </div>
-    <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside></div>
-    <div class="vw-help">← → ou molette : image suivante · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · 0 retirer · Suppr Corbeille · I infos · Échap fermer</div>`;
+    <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside>
+      <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Niveau de zoom"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zreal" title="Taille réelle / ajuster (Z ou double-clic)">1:1</button><button data-v="zfit" title="Ajuster à la fenêtre (F)">Ajuster</button></div></div>
+    <div class="vw-help">Molette : zoom · glisser : déplacer · double-clic : 1:1 · ← → : image suivante (ou Maj + molette) · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · Suppr Corbeille · I infos · Échap fermer</div>`;
+  const stage = viewerEl.querySelector('.vw-stage');
+  stage.addEventListener('pointerdown', zoomPanStart);
+  // (pendant un déplacement, la capture du pointeur fait de la scène la cible : on ne teste pas l'image)
+  stage.addEventListener('dblclick', (ev) => zoomToggleReal(ev.clientX, ev.clientY));
   showViewerItem();
 }
+
+/* ----- Zoom de la visionneuse ----- */
+
+const ZOOM_MAX = 32; // en pixels d'écran par pixel de l'image
+const zoomImg = () => (vw?.mode === 'single' ? viewerEl.querySelector('.vw-stage img') : null);
+/** Rapport entre la taille affichée (ajustée à la fenêtre) et la taille réelle de l'image, en pixels d'écran. */
+const zoomFit = (img) => (img.naturalWidth ? (img.offsetWidth * devicePixelRatio) / img.naturalWidth : 1);
+
+function zoomApply() {
+  const img = zoomImg();
+  if (!img || !vw.z) return;
+  const z = vw.z;
+  const f = zoomFit(img);
+  const st = viewerEl.querySelector('.vw-stage');
+  z.s = Math.min(Math.max(z.s, 1), Math.max(1, ZOOM_MAX / f));
+  const mx = Math.max(0, (img.offsetWidth * z.s - st.clientWidth) / 2);
+  const my = Math.max(0, (img.offsetHeight * z.s - st.clientHeight) / 2);
+  z.x = Math.min(Math.max(z.x, -mx), mx);
+  z.y = Math.min(Math.max(z.y, -my), my);
+  const zoomed = z.s > 1.001;
+  img.style.transform = zoomed ? `translate(${z.x}px, ${z.y}px) scale(${z.s})` : '';
+  st.classList.toggle('zoomed', zoomed);
+  viewerEl.querySelector('.vw-pct').textContent = img.naturalWidth ? `${Math.round(z.s * f * 100)} %` : '';
+  // Format non affichable par le moteur web : miniature plus grande dès qu'on dépasse sa définition
+  const e = vw.list[vw.i];
+  if (zoomed && !vw.hi && !IMG_VIEW.has(e.ext) && z.s * f > 0.9) {
+    vw.hi = true;
+    const big = new Image();
+    big.onload = () => { if (vw?.list[vw.i] === e && zoomImg()) { zoomImg().src = big.src; zoomApply(); } };
+    big.src = thumbUrl(e, 4096 / devicePixelRatio);
+  }
+}
+
+/** Multiplie le zoom par `factor` en gardant fixe le point (cx, cy) de l'écran (le centre si absent). */
+function zoomAt(factor, cx, cy) {
+  const img = zoomImg();
+  if (!img) return;
+  const r = viewerEl.querySelector('.vw-stage').getBoundingClientRect();
+  const z = vw.z;
+  const px = (cx ?? r.left + r.width / 2) - (r.left + r.width / 2);
+  const py = (cy ?? r.top + r.height / 2) - (r.top + r.height / 2);
+  const s = Math.min(Math.max(z.s * factor, 1), Math.max(1, ZOOM_MAX / zoomFit(img)));
+  const k = s / z.s;
+  z.x = px - k * (px - z.x);
+  z.y = py - k * (py - z.y);
+  z.s = s;
+  zoomApply();
+}
+
+function zoomReset() {
+  if (!vw?.z) return;
+  vw.z.s = 1; vw.z.x = 0; vw.z.y = 0;
+  zoomApply();
+}
+
+/** Bascule entre « ajusté » et la taille réelle (ou 2× si l'image est déjà affichée à sa taille réelle). */
+function zoomToggleReal(cx, cy) {
+  const img = zoomImg();
+  if (!img) return;
+  if (vw.z.s > 1.001) { zoomReset(); return; }
+  zoomAt(Math.max(1 / zoomFit(img), 2), cx, cy);
+}
+
+function zoomPanStart(ev) {
+  if (ev.button !== 0 || !zoomImg() || vw.z.s <= 1.001) return;
+  ev.preventDefault();
+  const stage = ev.currentTarget;
+  stage.setPointerCapture(ev.pointerId);
+  stage.classList.add('panning');
+  let lx = ev.clientX, ly = ev.clientY;
+  const move = (m) => {
+    if (!vw?.z) return;
+    vw.z.x += m.clientX - lx; vw.z.y += m.clientY - ly;
+    lx = m.clientX; ly = m.clientY;
+    zoomApply();
+  };
+  const up = () => {
+    stage.classList.remove('panning');
+    stage.removeEventListener('pointermove', move);
+    stage.removeEventListener('pointerup', up);
+    stage.removeEventListener('pointercancel', up);
+  };
+  stage.addEventListener('pointermove', move);
+  stage.addEventListener('pointerup', up);
+  stage.addEventListener('pointercancel', up);
+}
+
+window.addEventListener('resize', () => { if (!viewerEl.hidden && vw) zoomApply(); });
 
 function showViewerItem() {
   const e = vw.list[vw.i];
   const stage = viewerEl.querySelector('.vw-stage');
-  stage.innerHTML = VIDEO_VIEW.has(e.ext)
-    ? `<video src="${convertFileSrc(e.path)}" controls autoplay loop></video>`
-    : `<img src="${assetOrThumb(e, 1024)}" alt="">`;
+  const isVideo = VIDEO_VIEW.has(e.ext);
+  if (vw.shown !== e) { // nouvelle image : on repart ajusté (une étiquette ou les infos gardent le zoom)
+    vw.shown = e;
+    vw.z = { s: 1, x: 0, y: 0 };
+    vw.hi = false;
+    stage.classList.remove('zoomed', 'panning');
+    stage.innerHTML = isVideo
+      ? `<video src="${convertFileSrc(e.path)}" controls autoplay loop></video>`
+      : `<img src="${assetOrThumb(e, 1024)}" alt="" draggable="false">`;
+    stage.querySelector('img')?.addEventListener('load', zoomApply);
+  }
+  viewerEl.querySelector('.vw-zoom').hidden = isVideo;
+  zoomApply();
   viewerEl.querySelector('.vw-title').innerHTML = `${tagDot(e)}${esc(e.name)} ${ratingBadge(e)}`;
   viewerEl.querySelector('.vw-count').textContent = `${vw.i + 1} / ${vw.list.length}`;
   viewerEl.querySelector('.vw-info').hidden = !vw.info;
@@ -628,6 +731,7 @@ async function viewerTrash() {
   const stage = viewerEl.querySelector('.vw-stage');
   stage.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); v.load(); });
   stage.innerHTML = '';
+  vw.shown = null;
   await releaseHandles();
   try {
     if (await invoke('trash_paths', { paths: [e.path] })) { toast('Opération annulée'); showViewerItem(); return; }
@@ -684,6 +788,10 @@ viewerEl.addEventListener('click', async (ev) => {
     case 'close': closeViewer(); break;
     case 'prev': viewerGo(-1); break;
     case 'next': viewerGo(1); break;
+    case 'zin': zoomAt(1.5); break;
+    case 'zout': zoomAt(1 / 1.5); break;
+    case 'zfit': zoomReset(); break;
+    case 'zreal': zoomToggleReal(); break;
     case 'open': invoke('open_path', { path: vw.list[vw.i].path }).catch((err) => toast(cleanError(err), 'error')); break;
     case 'info': vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); break;
     case 'keep': viewerTag('vert', true); break;
@@ -706,15 +814,20 @@ viewerEl.addEventListener('click', async (ev) => {
   }
 });
 
-// Molette : image précédente / suivante
+// Molette : zoom sur le curseur (Maj + molette, ou vidéo : image précédente / suivante)
 let vwWheel = 0;
 viewerEl.addEventListener('wheel', (ev) => {
   if (!vw || vw.mode !== 'single' || ev.target.closest('.vw-info, video')) return;
   ev.preventDefault();
+  const dy = (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 33 : 1);
+  if (zoomImg() && !ev.shiftKey) {
+    if (ev.deltaY) zoomAt(Math.exp(-dy * (ev.ctrlKey ? 0.01 : 0.0018)), ev.clientX, ev.clientY);
+    return;
+  }
   const now = performance.now();
-  if (now - vwWheel < 90 || Math.abs(ev.deltaY) < 4) return;
+  if (now - vwWheel < 90 || Math.abs(dy) < 4) return;
   vwWheel = now;
-  viewerGo(ev.deltaY > 0 ? 1 : -1);
+  viewerGo(dy > 0 ? 1 : -1);
 }, { passive: false });
 
 // Clavier de la visionneuse (prioritaire sur le reste de l'application)
@@ -731,6 +844,11 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key === 'ArrowDown' || ev.key === 'PageDown') viewerGo(1);
   else if (ev.key === 'ArrowUp' || ev.key === 'PageUp' || ev.key === 'Backspace') viewerGo(-1);
   else if (ev.key === 'Enter') viewerEl.querySelector('[data-v="open"]')?.click();
+  else if (ev.ctrlKey || ev.metaKey) { /* pas de lettre seule avec Ctrl */ }
+  else if (ev.key === '+' || ev.key === '=') zoomAt(1.5);
+  else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.5);
+  else if (ev.key.toLowerCase() === 'f') zoomReset();
+  else if (ev.key.toLowerCase() === 'z') zoomToggleReal();
   else if (ev.key === 'Home') viewerGo(-1e9);
   else if (ev.key === 'End') viewerGo(1e9);
   else if (ev.key === 'Delete') viewerTrash();
