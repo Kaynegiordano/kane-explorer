@@ -631,7 +631,8 @@ function zoomApply() {
 }
 
 /** Multiplie le zoom par `factor` en gardant fixe le point (cx, cy) de l'écran (le centre si absent). */
-function zoomAt(factor, cx, cy) {
+function zoomAt(factor, cx, cy, box) {
+  if (vw?.mode === 'compare') return cmpZoomAt(factor, cx, cy, box);
   const img = zoomImg();
   if (!img) return;
   const r = viewerEl.querySelector('.vw-stage').getBoundingClientRect();
@@ -647,13 +648,19 @@ function zoomAt(factor, cx, cy) {
 }
 
 function zoomReset() {
+  if (vw?.mode === 'compare') { vw.cz = { s: 1, nx: 0, ny: 0 }; cmpApply(); return; }
   if (!vw?.z) return;
   vw.z.s = 1; vw.z.x = 0; vw.z.y = 0;
   zoomApply();
 }
 
 /** Bascule entre « ajusté » et la taille réelle (ou 2× si l'image est déjà affichée à sa taille réelle). */
-function zoomToggleReal(cx, cy) {
+function zoomToggleReal(cx, cy, box) {
+  if (vw?.mode === 'compare') {
+    const img = (box || viewerEl.querySelector('.cmp-img')).querySelector('img');
+    if (vw.cz.s > 1.001) zoomReset(); else cmpZoomAt(Math.max(1 / zoomFit(img), 2), cx, cy, box);
+    return;
+  }
   const img = zoomImg();
   if (!img) return;
   if (vw.z.s > 1.001) { zoomReset(); return; }
@@ -684,7 +691,75 @@ function zoomPanStart(ev) {
   stage.addEventListener('pointercancel', up);
 }
 
-window.addEventListener('resize', () => { if (!viewerEl.hidden && vw) zoomApply(); });
+/* Comparaison : un seul zoom et un seul décalage (en fraction de l'image) pour toutes les images */
+
+function cmpApply() {
+  if (vw?.mode !== 'compare') return;
+  const c = vw.cz;
+  const imgs = [...viewerEl.querySelectorAll('.cmp-img img')];
+  c.s = Math.min(Math.max(c.s, 1), Math.min(...imgs.map((i) => Math.max(1, ZOOM_MAX / zoomFit(i)))));
+  const zoomed = c.s > 1.001;
+  for (const img of imgs) {
+    const box = img.parentElement;
+    const mx = Math.max(0, (img.offsetWidth * c.s - box.clientWidth) / 2) / (img.offsetWidth || 1);
+    const my = Math.max(0, (img.offsetHeight * c.s - box.clientHeight) / 2) / (img.offsetHeight || 1);
+    c.nx = Math.min(Math.max(c.nx, -mx), mx);
+    c.ny = Math.min(Math.max(c.ny, -my), my);
+  }
+  for (const img of imgs) {
+    const box = img.parentElement;
+    const mx = Math.max(0, (img.offsetWidth * c.s - box.clientWidth) / 2) / (img.offsetWidth || 1);
+    const my = Math.max(0, (img.offsetHeight * c.s - box.clientHeight) / 2) / (img.offsetHeight || 1);
+    const nx = Math.min(Math.max(c.nx, -mx), mx), ny = Math.min(Math.max(c.ny, -my), my);
+    img.style.transform = zoomed ? `translate(${nx * img.offsetWidth}px, ${ny * img.offsetHeight}px) scale(${c.s})` : '';
+    box.classList.toggle('zoomed', zoomed);
+  }
+  viewerEl.querySelector('.vw-pct').textContent = zoomed ? `×${c.s.toFixed(1)}` : 'ajusté';
+}
+
+function cmpZoomAt(factor, cx, cy, box) {
+  const c = vw.cz;
+  box = box || viewerEl.querySelector('.cmp-img');
+  const img = box.querySelector('img');
+  const r = box.getBoundingClientRect();
+  const px = (cx ?? r.left + r.width / 2) - (r.left + r.width / 2);
+  const py = (cy ?? r.top + r.height / 2) - (r.top + r.height / 2);
+  const s = Math.min(Math.max(c.s * factor, 1), Math.max(1, ZOOM_MAX / zoomFit(img)));
+  const k = s / c.s;
+  c.nx = (px - k * (px - c.nx * img.offsetWidth)) / (img.offsetWidth || 1);
+  c.ny = (py - k * (py - c.ny * img.offsetHeight)) / (img.offsetHeight || 1);
+  c.s = s;
+  cmpApply();
+}
+
+function cmpPanStart(ev) {
+  if (ev.button !== 0 || !vw?.cz || vw.cz.s <= 1.001) return;
+  ev.preventDefault();
+  const box = ev.currentTarget;
+  const img = box.querySelector('img');
+  box.setPointerCapture(ev.pointerId);
+  const stages = [...viewerEl.querySelectorAll('.cmp-img')];
+  stages.forEach((b) => b.classList.add('panning'));
+  let lx = ev.clientX, ly = ev.clientY;
+  const move = (m) => {
+    if (vw?.mode !== 'compare') return;
+    vw.cz.nx += (m.clientX - lx) / (img.offsetWidth || 1);
+    vw.cz.ny += (m.clientY - ly) / (img.offsetHeight || 1);
+    lx = m.clientX; ly = m.clientY;
+    cmpApply();
+  };
+  const up = () => {
+    stages.forEach((b) => b.classList.remove('panning'));
+    box.removeEventListener('pointermove', move);
+    box.removeEventListener('pointerup', up);
+    box.removeEventListener('pointercancel', up);
+  };
+  box.addEventListener('pointermove', move);
+  box.addEventListener('pointerup', up);
+  box.addEventListener('pointercancel', up);
+}
+
+window.addEventListener('resize', () => { if (!viewerEl.hidden && vw) { zoomApply(); cmpApply(); } });
 
 function showViewerItem() {
   const e = vw.list[vw.i];
@@ -760,16 +835,23 @@ function viewerGo(d) {
 /** Comparaison de 2 à 4 images avec leurs réglages de génération. */
 function openCompare(list) {
   if (list.length < 2) return;
-  vw = { list: [...list], mode: 'compare' };
+  vw = { list: [...list], mode: 'compare', cz: { s: 1, nx: 0, ny: 0 } };
   showViewerShell('compare');
   viewerEl.innerHTML = `
-    <div class="vw-top"><span class="vw-title">Comparaison · ${list.length} images</span><span class="grow"></span>
+    <div class="vw-top"><span class="vw-title">Comparaison · ${list.length} images</span>
+      <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Zoom commun à toutes les images"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zfit" title="Ajuster (F)">Ajuster</button></div>
+      <span class="grow"></span>
       <button data-v="close" title="Fermer (Échap)">✕</button></div>
     <div class="vw-compare" style="grid-template-columns:repeat(${list.length},1fr)">
       ${list.map((e, k) => `<figure data-k="${k}"><div class="cmp-img"><img src="${assetOrThumb(e, 1024)}" alt=""></div>
         <figcaption><b>${tagDot(e)}${esc(e.name)}</b><span class="cmp-meta"></span>
         <span class="cmp-actions"><button data-v="ckeep" data-k="${k}">Garder</button><button data-v="ctrash" data-k="${k}" class="danger">Corbeille</button></span></figcaption></figure>`).join('')}
     </div>`;
+  viewerEl.querySelectorAll('.cmp-img').forEach((box) => {
+    box.addEventListener('pointerdown', cmpPanStart);
+    box.addEventListener('dblclick', (ev) => zoomToggleReal(ev.clientX, ev.clientY, box));
+    box.querySelector('img').addEventListener('load', cmpApply);
+  });
   list.forEach(async (e, k) => {
     if (!AI_EXT.has(e.ext)) return;
     const ai = aiMeta(await invoke('image_meta', { path: e.path }).catch(() => []));
@@ -817,6 +899,13 @@ viewerEl.addEventListener('click', async (ev) => {
 // Molette : zoom sur le curseur (Maj + molette, ou vidéo : image précédente / suivante)
 let vwWheel = 0;
 viewerEl.addEventListener('wheel', (ev) => {
+  if (vw?.mode === 'compare') {
+    const box = ev.target.closest('.cmp-img');
+    if (!box || !ev.deltaY) return;
+    ev.preventDefault();
+    cmpZoomAt(Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 33 : 1) * (ev.ctrlKey ? 0.01 : 0.0018)), ev.clientX, ev.clientY, box);
+    return;
+  }
   if (!vw || vw.mode !== 'single' || ev.target.closest('.vw-info, video')) return;
   ev.preventDefault();
   const dy = (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 33 : 1);
@@ -837,6 +926,12 @@ document.addEventListener('keydown', (ev) => {
   ev.stopImmediatePropagation();
   ev.preventDefault();
   if (ev.key === 'Escape') { if (!els.menu.hidden) hideMenu(); else closeViewer(); return; }
+  if (vw.mode === 'compare' && !ev.ctrlKey && !ev.metaKey) {
+    if (ev.key === '+' || ev.key === '=') zoomAt(1.5);
+    else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.5);
+    else if (ev.key.toLowerCase() === 'f') zoomReset();
+    return;
+  }
   if (vw.mode !== 'single') return;
   if (ev.altKey && /^[0-5]$/.test(ev.key)) setRating([vw.list[vw.i].path], +ev.key);
   else if (ev.key === 'ArrowRight' || ev.key === ' ') viewerGo(1);

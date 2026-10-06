@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.2** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.3** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -94,6 +94,8 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   glisser = déplacer, double-clic = 1:1 / ajuster, `+` `-` `F` `Z`, Maj + molette = image suivante. Une nouvelle image repart
   ajustée ; étiquette / infos conservent le zoom (`vw.shown`). Formats non affichables par le moteur web : miniature 4096 chargée
   au-delà de 90 % (Windows plafonne parfois à 1280 px). Pendant un déplacement la capture du pointeur fait de la scène la cible du `dblclick`.
+  Comparaison : un seul zoom partagé `vw.cz = {s,nx,ny}` (décalage en fraction de la taille de chaque image : `cmpApply`,
+  `cmpZoomAt`, `cmpPanStart`) ; `zoomAt` / `zoomReset` / `zoomToggleReal` aiguillent vers la comparaison si `vw.mode === 'compare'`.
 - **Animations** : `creative.css` (fin du fichier), désactivables (Options → Animations = classe `body.no-anim`) et
   coupées si Windows demande de réduire les animations. Ne pas animer ce qui est reconstruit à chaque rendu (onglets,
   aperçu : clignotement).
@@ -163,6 +165,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.0 | Palette Ctrl+K, recherche avancée et recherches enregistrées, notes en étoiles, colonnes personnalisables, sessions d'onglets, apparence, annuler Ctrl+Z, archives comme dossiers, ComfyUI retiré |
 | 1.2.1 | Nouveau logo (dossier bleu + K turquoise, créé par l'utilisateur) appliqué partout : icônes, barre latérale, installateur |
 | 1.2.2 | Visionneuse : zoom à la molette (autour du curseur), déplacement au glisser, double-clic 1:1, barre de zoom, touches + - F Z ; Maj + molette = image suivante |
+| 1.2.3 | Comparaison d'images : zoom et déplacement synchronisés (molette, glisser, double-clic, barre de zoom, + - F) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
