@@ -73,6 +73,32 @@ async function openVirtual(e) {
   clearTimeout(slow);
 }
 
+const dragExtracted = new Map(); // chemin dans l'archive -> fichier extrait (réutilisé tant qu'il existe)
+
+/** Extrait en temporaire les éléments à faire glisser et renvoie leurs chemins réels. */
+async function extractForDrag(entries) {
+  const paths = [];
+  for (const e of entries) {
+    const known = dragExtracted.get(e.path.toLowerCase());
+    if (known && (await invoke('path_states', { paths: [known] }))[0] !== 0) { paths.push(known); continue; }
+    const { archive, inner } = splitArchivePath(e.path);
+    const out = await invoke('archive_extract_temp', { archive, name: inner });
+    dragExtracted.set(e.path.toLowerCase(), out);
+    paths.push(out);
+  }
+  return paths;
+}
+
+/** Glisser depuis une archive : extraction (si besoin) puis glisser-déposer Windows normal. */
+async function dragVirtual(entries) {
+  const slow = setTimeout(() => toast('Extraction…'), 400);
+  try {
+    const paths = await extractForDrag(entries);
+    if (!primaryDown) { toast('Extraction terminée : recommencez le glisser'); return; }
+    await invoke('start_drag', { paths });
+  } finally { clearTimeout(slow); }
+}
+
 /** Dossier de destination libre à côté de l'archive : « nom », « nom (2) »… */
 async function freeFolderBeside(archive) {
   const dir = parentOf(archive);

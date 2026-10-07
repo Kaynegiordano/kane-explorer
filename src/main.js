@@ -1163,7 +1163,9 @@ els.addressInput.addEventListener('blur', closeAddress);
 
 /* ---------------- Menu contextuel ---------------- */
 
+let menuPos = { x: 0, y: 0 }; // position du dernier menu : sert à ouvrir un sous-menu au même endroit
 function showMenu(x, y, entries) {
+  menuPos = { x, y };
   els.menu.innerHTML = entries.filter(Boolean).map((m, i) => m === '-' ? '<hr>' :
     `<button data-i="${i}" ${m.disabled ? 'disabled' : ''} class="${m.danger ? 'danger' : ''}"><span>${m.label}</span>${m.kbd ? `<span class="kbd">${m.kbd}</span>` : ''}</button>`
   ).join('');
@@ -1212,12 +1214,29 @@ function itemMenu() {
   ];
 }
 
+/** Sous-menu « Trier par » : toutes les colonnes (y compris celles de meta.js), l'ordre et les dossiers en premier. */
+function sortMenu() {
+  const mark = (on) => (on ? '● ' : '  ');
+  const setKey = (k) => { savePref('sortKey', k); render(); };
+  const setDir = (d) => { savePref('sortDir', d); render(); };
+  return [
+    { label: mark(prefs.sortKey === 'name') + 'Nom', run: () => setKey('name') },
+    ...Object.entries(COLS).map(([k, c]) => ({ label: mark(prefs.sortKey === k) + c.label, run: () => setKey(k) })),
+    '-',
+    { label: mark(prefs.sortDir > 0) + 'Croissant', run: () => setDir(1) },
+    { label: mark(prefs.sortDir < 0) + 'Décroissant', run: () => setDir(-1) },
+    '-',
+    { label: (prefs.foldersFirst ? '✓ ' : '  ') + 'Dossiers en premier', run: () => { savePref('foldersFirst', !prefs.foldersFirst); render(); } },
+  ];
+}
+
 function blankMenu() {
   if (tab.virtual) return virtualBlankMenu();
   return [
     { label: 'Nouveau dossier', kbd: 'Ctrl+Maj+N', run: doNewFolder },
     { label: 'Coller', kbd: 'Ctrl+V', run: doPaste },
     '-',
+    { label: 'Trier par', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, sortMenu()) },
     { label: 'Affichage : liste', kbd: 'Ctrl+1', run: () => setView('list') },
     { label: 'Affichage : grandes icônes', kbd: 'Ctrl+2', run: () => setView('grid') },
     { label: (prefs.showHidden ? '✓ ' : '') + 'Éléments masqués', kbd: 'Ctrl+H', run: toggleHidden },
@@ -1277,22 +1296,25 @@ els.content.addEventListener('dblclick', (ev) => {
 // Départ : glissement Windows officiel (Bureau, Explorateur, Discord, logiciels de montage...)
 let dragStart = null;
 let suppressClick = false;
+let primaryDown = false; // bouton gauche enfoncé (le glisser depuis une archive attend l'extraction)
 els.content.addEventListener('pointerdown', (ev) => {
   const it = ev.target.closest('.item');
   dragStart = ev.button === 0 && it && !ev.target.closest('.rename-input')
     ? { x: ev.clientX, y: ev.clientY, i: +it.dataset.i } : null;
+  primaryDown = ev.button === 0;
 });
 els.content.addEventListener('pointerup', () => { dragStart = null; });
+for (const t of ['pointerup', 'pointercancel', 'blur']) window.addEventListener(t, () => { primaryDown = false; });
 els.content.addEventListener('pointermove', (ev) => {
   if (!dragStart) return;
-  if (tab.virtual || !(ev.buttons & 1)) { dragStart = null; return; } // pas de glisser depuis une archive
+  if (!(ev.buttons & 1)) { dragStart = null; return; }
   if (Math.abs(ev.clientX - dragStart.x) + Math.abs(ev.clientY - dragStart.y) < 8) return;
   const e = tab.items[dragStart.i];
   if (!tab.selected.has(e.path)) { selectOnly(dragStart.i); tab.focus = dragStart.i; paintSelection(); }
   dragStart = null;
   suppressClick = true;
   showDragBar(); // raccourcis vers les autres fenêtres Kane
-  invoke('start_drag', { paths: selectedPaths() })
+  (tab.virtual ? dragVirtual(selectedEntries()) : invoke('start_drag', { paths: selectedPaths() }))
     .catch((err) => toast(cleanError(err), 'error'))
     .finally(() => { hideDragBar(); setTimeout(() => { suppressClick = false; }, 100); });
 });
