@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.2.4"
+version = "1.2.5"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
@@ -21,6 +21,7 @@ notify = "8"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 png = "0.17"
+zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
@@ -38,6 +39,8 @@ windows = { version = "0.62", features = [
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_Shell_PropertiesSystem",

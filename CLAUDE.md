@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.4** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.5** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -99,6 +99,10 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 - **Glisser depuis une archive** (`dragVirtual` / `extractForDrag`, archive.js) : les éléments sont extraits dans `%TEMP%\KaneArchive`
   au départ du glisser (bouton encore enfoncé, sinon message « recommencez »), puis `start_drag` normal : fonctionne vers n'importe
   quelle fenêtre (Explorateur, autre Kane, autre logiciel). Vérifié avec une cible WinForms (FileDrop reçu, fichier existant).
+- **Zips** (`fsx.rs` : `zip_list` / `zip_extract`, crate `zip` avec `deflate` + `deflate64`) : lus par la bibliothèque, car `tar.exe` refuse
+  Deflate64 (« Unsupported ZIP compression method (9) », zips de 7-Zip/WinRAR…) ; repli sur `tar.exe` si la bibliothèque échoue
+  (méthode inconnue). Les autres formats (7z, rar, tar, iso) restent sur `tar.exe`. `unzip_here` passe aussi par `archive_extract`.
+  Banc d'essai : un vrai zip Deflate64 (RevoUninstaller_Portable.zip, Téléchargements).
 - **Menu « Trier par »** (`sortMenu`, main.js) : sous-menu du clic droit dans le vide (un second `showMenu` à `menuPos`), toutes les
   colonnes de `COLS`, croissant/décroissant, dossiers en premier.
 - **Animations** : `creative.css` (fin du fichier), désactivables (Options → Animations = classe `body.no-anim`) et
@@ -121,6 +125,12 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   surveille la fenêtre sous le curseur et la passe au premier plan après 450 ms (`watch_drag_hover`, astuce
   TOPMOST/NOTOPMOST + `AllowSetForegroundWindow`). Barre « Déposer dans : » (autres fenêtres Kane via
   `localStorage kane.win.*`, Bureau), étiquette « Déplacer/Copier vers… », onglets ouverts au survol.
+- **Glisser vers la barre des tâches** (`watch_drag_hover`, win.rs) : Windows 11 n'active pas la fenêtre d'un bouton survolé pour un
+  glisser venant d'un autre programme, et la barre était ignorée. Désormais, curseur immobile 450 ms sur la barre : UI Automation
+  (`IUIAutomation::ElementFromPoint`) lit le bouton (`AutomationId` = « Appid: … »), puis `taskbar_button_window` retrouve sa fenêtre :
+  1) même AppUserModelID (`SHGetPropertyStoreForWindow`), 2) programme dont le nom est dans l'identifiant, 3) titre de la fenêtre contre
+  le nom du bouton (ex. « Kane OS - 1 fenêtre… » ↔ « Kane OS », fenêtre `pythonw` sans AUMID). Puis `raise()`. Vérifié avec un vrai glisser
+  (souris simulée) vers le bouton d'une autre appli : elle passe au premier plan. Les boutons sans fenêtre (épinglés fermés) ne font rien.
 - **OneDrive** : attributs `RECALL_ON_DATA_ACCESS|RECALL_ON_OPEN|OFFLINE` = en ligne uniquement (jamais lus :
   pas d'aperçu, ni prompts, ni doublons) ; `PINNED 0x80000`. « Toujours conserver / Libérer » via `attrib +P -U`.
 - **Noms traduits** (desktop.ini, ex. `Screenshots` → « Captures d'écran ») : `SHGetFileInfoW(SHGFI_DISPLAYNAME)`
@@ -172,6 +182,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.2 | Visionneuse : zoom à la molette (autour du curseur), déplacement au glisser, double-clic 1:1, barre de zoom, touches + - F Z ; Maj + molette = image suivante |
 | 1.2.3 | Comparaison d'images : zoom et déplacement synchronisés (molette, glisser, double-clic, barre de zoom, + - F) |
 | 1.2.4 | Menu « Trier par » (clic droit dans le vide) ; glisser-déposer depuis une archive vers n'importe quelle fenêtre (extraction temporaire) |
+| 1.2.5 | Zips Deflate64 lus par la bibliothèque `zip` (tar.exe les refuse) ; glisser vers un bouton de la barre des tâches = la fenêtre passe au premier plan |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

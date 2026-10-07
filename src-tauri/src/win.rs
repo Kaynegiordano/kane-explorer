@@ -283,15 +283,111 @@ fn ignored_window(h: HWND) -> bool {
     )
 }
 
+fn is_taskbar(h: HWND) -> bool {
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(h, &mut buf) } as usize;
+    matches!(String::from_utf16_lossy(&buf[..n]).as_str(), "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+}
+
+/// Identifiant d'application (AppUserModelID) d'une fenêtre, tel que la barre des tâches l'utilise pour regrouper ses boutons.
+fn window_app_id(h: HWND) -> Option<String> {
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PSFormatForDisplayAlloc, SHGetPropertyStoreForWindow, PDFF_DEFAULT};
+    let key = PROPERTYKEY { fmtid: windows::core::GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3), pid: 5 };
+    unsafe {
+        let store: IPropertyStore = SHGetPropertyStoreForWindow(h).ok()?;
+        let value = store.GetValue(&key).ok()?;
+        if value.is_empty() {
+            return None;
+        }
+        let text = PSFormatForDisplayAlloc(&key, &value, PDFF_DEFAULT).ok()?;
+        let s = text.to_string().ok();
+        CoTaskMemFree(Some(text.0 as *const _));
+        s.filter(|s| !s.is_empty())
+    }
+}
+
+/// Nom du programme (sans « .exe », en minuscules) qui possède la fenêtre.
+fn window_exe_stem(h: HWND) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 520];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(proc, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(proc);
+        if !ok {
+            return None;
+        }
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().to_lowercase())
+    }
+}
+
+/// Fenêtres visibles de premier niveau, de la plus haute à la plus basse dans l'ordre Z.
+fn top_level_windows() -> Vec<HWND> {
+    unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> windows::core::BOOL {
+        let list = &mut *(lp.0 as *mut Vec<HWND>);
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if IsWindowVisible(h).as_bool() && GetWindow(h, GW_OWNER).is_err() && ex & WS_EX_TOOLWINDOW.0 == 0 {
+            let mut t = [0u16; 4];
+            if GetWindowTextW(h, &mut t) > 0 {
+                list.push(h);
+            }
+        }
+        true.into()
+    }
+    let mut list: Vec<HWND> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut list as *mut _ as isize));
+    }
+    list
+}
+
+/// Fenêtre correspondant au bouton de la barre des tâches situé sous `pt` (lecture par UI Automation).
+fn taskbar_button_window(auto: &windows::Win32::UI::Accessibility::IUIAutomation, pt: POINT) -> Option<HWND> {
+    let el = unsafe { auto.ElementFromPoint(pt) }.ok()?;
+    let id = unsafe { el.CurrentAutomationId() }.ok()?.to_string();
+    let name = unsafe { el.CurrentName() }.ok()?.to_string().to_lowercase();
+    let app = id.strip_prefix("Appid: ")?.to_string(); // sinon : ce n'est pas un bouton d'application
+    let wins = top_level_windows();
+    // 1. même identifiant d'application ; 2. même programme (identifiant du bouton qui contient son nom) ;
+    // 3. titre de la fenêtre (« Kane OS - 1 fenêtre en cours d'exécution » ↔ « Kane OS »)
+    if let Some(h) = wins.iter().find(|h| window_app_id(**h).is_some_and(|a| a.eq_ignore_ascii_case(&app))) {
+        return Some(*h);
+    }
+    let app_l = app.to_lowercase();
+    if let Some(h) = wins.iter().find(|h| window_exe_stem(**h).is_some_and(|stem| stem.len() > 2 && app_l.contains(&stem))) {
+        return Some(*h);
+    }
+    let base = name.split(" - ").next().unwrap_or("").trim().to_string();
+    wins.into_iter().find(|h| {
+        let mut buf = [0u16; 160];
+        let n = unsafe { GetWindowTextW(*h, &mut buf) } as usize;
+        let title = String::from_utf16_lossy(&buf[..n]).to_lowercase();
+        base.len() > 2 && (title == base || title.starts_with(&base) || (title.len() > 2 && name.starts_with(&title)))
+    })
+}
+
 /// Pendant un glisser : la fenêtre survolée (n'importe quel logiciel) passe au premier plan
 /// après un court instant, pour voir où l'on dépose. S'arrête quand `stop` passe à vrai.
 fn watch_drag_hover(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
     use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
     std::thread::spawn(move || {
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+        use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation};
         let mut last: isize = 0;
         let mut since = Instant::now();
         let mut raised: isize = 0;
+        let mut auto: Option<IUIAutomation> = None;
+        let mut anchor = POINT::default(); // barre des tâches : position où le curseur s'est arrêté
+        let mut anchor_since = Instant::now();
+        let mut anchor_done = false;
         while !stop.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(40));
             unsafe {
@@ -302,6 +398,28 @@ fn watch_drag_hover(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) {
                 let root = GetAncestor(WindowFromPoint(pt), GA_ROOT);
                 let id = root.0 as isize;
                 if id == 0 {
+                    continue;
+                }
+                // Au-dessus d'un bouton de la barre des tâches : après un instant, sa fenêtre passe devant
+                // (Windows 11 ne le fait pas pour les glissers venant d'un autre programme)
+                if is_taskbar(root) {
+                    if (pt.x - anchor.x).abs() > 6 || (pt.y - anchor.y).abs() > 6 {
+                        anchor = pt;
+                        anchor_since = Instant::now();
+                        anchor_done = false;
+                    } else if !anchor_done && anchor_since.elapsed() >= Duration::from_millis(450) {
+                        anchor_done = true;
+                        if auto.is_none() {
+                            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                            auto = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok();
+                        }
+                        if let Some(target) = auto.as_ref().and_then(|a| taskbar_button_window(a, pt)) {
+                            if GetForegroundWindow() != target {
+                                raise(target, true);
+                            }
+                        }
+                    }
+                    last = id;
                     continue;
                 }
                 if id != last {

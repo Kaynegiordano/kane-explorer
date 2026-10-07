@@ -887,10 +887,9 @@ pub fn unzip_here(archive: &str) -> Result<String, String> {
     let stem = arch.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into());
     let dest = free_name(parent, &stem);
     fs::create_dir(&dest).map_err(|e| e.to_string())?;
-    let out = crate::fsx::tar().arg("-x").arg("-f").arg(arch).arg("-C").arg(&dest).output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
-    if !out.status.success() {
+    if let Err(e) = crate::fsx::archive_extract(archive, &[], &dest.to_string_lossy()) {
         let _ = fs::remove_dir(&dest);
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        return Err(e);
     }
     Ok(dest.to_string_lossy().into_owned())
 }

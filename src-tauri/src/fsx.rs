@@ -148,8 +148,66 @@ fn parse_line(line: &str) -> Option<ArchEntry> {
     Some(ArchEntry { name, is_dir, size: f[4].parse().unwrap_or(0), modified: parse_date(f[5], f[6], f[7]) })
 }
 
+fn is_zip(archive: &str) -> bool {
+    archive.to_lowercase().ends_with(".zip")
+}
+
+/// Lecture des .zip par la bibliothèque intégrée : gère Deflate64 (zips de Windows, de 7-Zip « Deflate64 »…),
+/// que le tar.exe de Windows refuse (« Unsupported ZIP compression method (9) »).
+fn zip_list(archive: &str) -> Result<Vec<ArchEntry>, String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut out = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        let f = zip.by_index_raw(i).map_err(|e| e.to_string())?;
+        let name = f.name().trim_start_matches("./").trim_end_matches('/').replace('\\', "/");
+        if name.is_empty() {
+            continue;
+        }
+        let modified = f
+            .last_modified()
+            .map(|d| {
+                let days = days_from_civil(d.year() as i64, d.month() as i64, d.day() as i64);
+                ((days * 86_400 + d.hour() as i64 * 3600 + d.minute() as i64 * 60 + d.second() as i64).max(0) as u64) * 1000
+            })
+            .unwrap_or(0);
+        out.push(ArchEntry { name, is_dir: f.is_dir(), size: f.size(), modified });
+    }
+    Ok(out)
+}
+
+fn zip_extract(archive: &str, names: &[String], dest: &str) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let wanted: Vec<String> = names.iter().map(|n| n.trim_end_matches('/').to_string()).collect();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).map_err(|e| e.to_string())?;
+        let Some(rel) = f.enclosed_name() else { continue }; // refuse les chemins qui sortent du dossier (« .. »)
+        let name = rel.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_string();
+        if !wanted.is_empty() && !wanted.iter().any(|w| name == *w || name.starts_with(&format!("{w}/"))) {
+            continue;
+        }
+        let target = Path::new(dest).join(&rel);
+        if f.is_dir() {
+            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        } else {
+            if let Some(p) = target.parent() {
+                std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+            }
+            let mut out = std::fs::File::create(&target).map_err(|e| format!("{name} : {e}"))?;
+            std::io::copy(&mut f, &mut out).map_err(|e| format!("{name} : {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Contenu complet d'une archive (zip, 7z, tar, rar, iso…), à plat.
 pub fn archive_list(archive: &str) -> Result<Vec<ArchEntry>, String> {
+    if is_zip(archive) {
+        if let Ok(list) = zip_list(archive) {
+            return Ok(list);
+        }
+    }
     let out = tar().arg("-tvf").arg(archive).output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
     if !out.status.success() && out.stdout.is_empty() {
         return Err(decode(&out.stderr).trim().to_string());
@@ -160,6 +218,13 @@ pub fn archive_list(archive: &str) -> Result<Vec<ArchEntry>, String> {
 /// Extrait des éléments (fichiers ou dossiers entiers) de l'archive dans `dest`.
 pub fn archive_extract(archive: &str, names: &[String], dest: &str) -> Result<(), String> {
     std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    if is_zip(archive) {
+        match zip_extract(archive, names, dest) {
+            Ok(()) => return Ok(()),
+            Err(e) if !e.contains("nsupported") => return Err(e),
+            Err(_) => {} // méthode inconnue de la bibliothèque : on tente avec tar.exe
+        }
+    }
     let mut cmd = tar();
     cmd.arg("-xf").arg(archive).arg("-C").arg(dest);
     if !names.is_empty() {
