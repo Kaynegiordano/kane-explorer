@@ -46,21 +46,35 @@ const prefs = {
   confirmDelete: store.get('confirmDelete', false),
   animations: store.get('animations', true),
   viewerOnOpen: store.get('viewerOnOpen', true),
+  updateMode: store.get('updateMode', 'notify'),      // notify | auto | manual
   openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
-  theme: store.get('theme', 'auto'),                 // auto | light | dark
+  theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
+  dayFrom: store.get('dayFrom', '07:00'),            // thème « selon l'heure » : clair à partir de…
+  dayTo: store.get('dayTo', '20:00'),                // …jusqu'à (sombre le reste du temps)
   accent: store.get('accent', ''),                   // '' = couleur d'origine, sinon #rrggbb
   density: store.get('density', 'comfortable'),      // comfortable | compact     // images / vidéos : visionneuse de Kane (navigation image par image)
 };
 const DEFAULT_OPTIONS = {
-  openFolders: 'same', clickMode: 'folders', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, openArchives: true, theme: 'auto', accent: '', density: 'comfortable',
+  openFolders: 'same', clickMode: 'folders', updateMode: 'notify', startup: 'restore', startPath: '',
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
 };
 
 /** Apparence : thème, couleur d'accent, densité des lignes. */
 const ACCENTS = [['Bleu', '#4a6cf7'], ['Violet', '#8b5cf6'], ['Rose', '#e0457b'], ['Rouge', '#e5484d'], ['Orange', '#f97316'], ['Vert', '#16a34a'], ['Turquoise', '#0ea5a4']];
+/** Thème réellement appliqué : « selon l'heure » = clair entre dayFrom et dayTo, sombre sinon (la plage peut passer minuit). */
+function resolvedTheme() {
+  if (prefs.theme !== 'schedule') return prefs.theme;
+  const mins = (s) => { const [h, m] = String(s).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const now = new Date();
+  const n = now.getHours() * 60 + now.getMinutes();
+  const a = mins(prefs.dayFrom), b = mins(prefs.dayTo);
+  return (a <= b ? n >= a && n < b : n >= a || n < b) ? 'light' : 'dark';
+}
+
 function applyLook() {
   const root = document.documentElement;
-  if (prefs.theme === 'light' || prefs.theme === 'dark') root.dataset.theme = prefs.theme; else delete root.dataset.theme;
+  const theme = resolvedTheme();
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme; else delete root.dataset.theme;
   if (/^#[0-9a-f]{6}$/i.test(prefs.accent)) {
     root.style.setProperty('--accent', prefs.accent);
     root.style.setProperty('--accent-soft', `color-mix(in srgb, ${prefs.accent} 18%, var(--panel))`);
@@ -72,6 +86,7 @@ function applyLook() {
   root.style.setProperty('--row-h', ROW_H + 'px');
 }
 applyLook();
+setInterval(() => { if (prefs.theme === 'schedule') applyLook(); }, 30000); // bascule clair / sombre à l'heure dite
 
 // Fenêtre secondaire (ouverte via « nouvelle fenêtre ») : ne touche pas aux onglets mémorisés
 const START_PATH = window.__KANE_START__ || null;
@@ -1848,6 +1863,8 @@ function openOptions() {
       ${radio('theme', 'auto', 'Thème de Windows')}
       ${radio('theme', 'light', 'Clair')}
       ${radio('theme', 'dark', 'Sombre')}
+      <label class="opt"><input type="radio" name="theme" value="schedule" ${prefs.theme === 'schedule' ? 'checked' : ''}> Automatique selon l’heure</label>
+      <div class="row-inline" style="padding-left:24px"><span>Clair de</span><input type="time" name="dayFrom" value="${esc(prefs.dayFrom)}"><span>à</span><input type="time" name="dayTo" value="${esc(prefs.dayTo)}"><span style="color:var(--muted)">(sombre le reste du temps)</span></div>
       <div class="row-inline accent-row" style="padding-left:0"><span>Couleur d'accent</span>
         ${ACCENTS.map(([n, c]) => `<button class="swatch${prefs.accent.toLowerCase() === c ? ' on' : ''}" data-accent="${c}" title="${n}" style="background:${c}"></button>`).join('')}
         <input type="color" name="accentColor" value="${/^#[0-9a-f]{6}$/i.test(prefs.accent) ? prefs.accent : '#4a6cf7'}" title="Couleur personnalisée">
@@ -1860,8 +1877,15 @@ function openOptions() {
       <button class="btn" data-act="quick">Personnaliser l'accès rapide…</button>
     </fieldset>
     <fieldset><legend>Mises à jour</legend>
-      <p class="lead" id="update-status">Kane Explorer vérifie automatiquement les nouvelles versions publiées sur GitHub.</p>
+      <p class="lead" id="update-status">Kane Explorer vérifie les nouvelles versions publiées sur GitHub (au démarrage, puis toutes les 6 h).</p>
+      ${radio('updateMode', 'notify', 'Me prévenir quand une version sort (recommandé)')}
+      ${radio('updateMode', 'auto', 'Installer automatiquement au démarrage de Kane')}
+      ${radio('updateMode', 'manual', 'Ne jamais vérifier tout seul')}
       <button class="btn" data-act="update">Rechercher des mises à jour</button>
+    </fieldset>
+    <fieldset><legend>Sauvegarde des réglages</legend>
+      <p class="lead">Enregistre vos épinglés, accès rapide, recherches, sessions, colonnes, notes et options dans un fichier (pour changer de PC ou tout retrouver).</p>
+      <div style="display:flex;gap:8px"><button class="btn" data-act="export">Exporter dans Documents</button><button class="btn" data-act="import">Restaurer…</button></div>
     </fieldset>
     <fieldset><legend>Explorateur par défaut</legend>
       <p class="lead" id="default-status">Vérification…</p>
@@ -1898,6 +1922,7 @@ function openOptions() {
     const el = ev.target;
     if (el.type === 'radio') savePref(el.name, el.value);
     else if (el.type === 'checkbox') savePref(el.name, el.checked);
+    else if (el.type === 'time') { savePref(el.name, el.value || DEFAULT_OPTIONS[el.name]); savePref('theme', 'schedule'); modalBox.querySelector('input[name=theme][value=schedule]').checked = true; }
     else if (el.name === 'accentColor') { savePref('accent', el.value); modalBox.querySelectorAll('.swatch').forEach((b) => b.classList.remove('on')); }
     else if (el.name === 'startPath') { savePref('startPath', el.value.trim()); savePref('startup', 'custom'); modalBox.querySelector('[value=custom]').checked = true; }
     apply();
@@ -1913,6 +1938,8 @@ function openOptions() {
       apply();
     }
     else if (act === 'quick') { closeModal(); openQuickEditor(); }
+    else if (act === 'export') exportSettings();
+    else if (act === 'import') { closeModal(); importSettings(); }
     else if (act === 'default') toggleDefaultExplorer();
     else if (act === 'update') {
       const info = await checkForUpdate();

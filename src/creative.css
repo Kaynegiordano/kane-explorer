@@ -322,3 +322,12 @@ body.single-folders .card, body.single-click .card { cursor: pointer; }
 /* Un clic sur « Kane Explorer » ouvre le menu caché (carte réseau, outils) */
 .sidebar .brand { cursor: pointer; border-radius: 8px; transition: background-color .14s ease; }
 .sidebar .brand:hover { background: var(--hover); }
+
+/* Notification de mise à jour */
+.toast.update { display: flex; flex-direction: column; gap: 4px; max-width: 360px; border-left-color: var(--accent); }
+.toast.update small { color: var(--muted); }
+.toast.update .row-btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.toast.update .btn { height: 28px; padding: 0 10px; }
+.toast.update .btn { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.toast.update .btn:hover { background: var(--hover); }
+.toast.update .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }

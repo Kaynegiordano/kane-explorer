@@ -1410,7 +1410,41 @@ async function checkForUpdate(quiet = false) {
   }
   renderUpdateButton();
   if (!quiet && !updateInfo.version) toast(`Kane Explorer ${updateInfo.current} est à jour`);
+  if (quiet && updateInfo.version) announceUpdate();
   return updateInfo;
+}
+
+/** Prévient (une seule fois par version) qu'une mise à jour est disponible : notification avec « Nouveautés » et « Mettre à jour ». */
+function announceUpdate() {
+  if (store.get('updateNotified', '') === updateInfo.version) return;
+  store.set('updateNotified', updateInfo.version);
+  const t = document.createElement('div');
+  t.className = 'toast update';
+  t.innerHTML = `<b>Kane Explorer ${esc(updateInfo.version)} est disponible</b><small>Vous avez la version ${esc(updateInfo.current)}.</small>` +
+    `<div class="row-btns"><button class="btn primary" data-u="go">Mettre à jour</button>${updateInfo.notes ? '<button class="btn" data-u="notes">Nouveautés</button>' : ''}<button class="btn" data-u="later">Plus tard</button></div>`;
+  t.onclick = (ev) => {
+    const b = ev.target.closest('[data-u]');
+    if (!b) return;
+    if (b.dataset.u === 'notes') showReleaseNotes(updateInfo.version, updateInfo.notes);
+    else { t.remove(); if (b.dataset.u === 'go') installUpdate(); }
+  };
+  els.toasts.append(t);
+  setTimeout(() => t.remove(), 60000);
+}
+
+function showReleaseNotes(version, notes) {
+  openModal(`<h2>Kane Explorer ${esc(version)}</h2><p class="lead" style="white-space:pre-wrap">${esc(notes || 'Pas de détails pour cette version.')}</p><div class="foot"><span></span><button class="btn primary" data-r="1">Fermer</button></div>`);
+  modalBox.onclick = (ev) => { if (ev.target.closest('[data-r]')) closeModal(); };
+}
+
+/** Après une mise à jour : annonce la nouvelle version et ce qu'elle apporte (une seule fois). */
+async function announceInstalledUpdate() {
+  const done = store.get('justUpdated', null);
+  if (!done) return;
+  const now = await window.__TAURI__.app.getVersion().catch(() => null);
+  if (now !== done.to) return; // pas encore installée : on garde l'information
+  store.set('justUpdated', null);
+  showReleaseNotes(`${done.to} installée`, `Kane Explorer a été mis à jour (${done.from} → ${done.to}).${done.notes ? '\n\nNouveautés :\n' + done.notes : ''}`);
 }
 
 function renderUpdateButton() {
@@ -1422,17 +1456,21 @@ function renderUpdateButton() {
   }
 }
 
-async function installUpdate() {
+async function installUpdate(silent = false) {
   if (!updateInfo?.version) { await checkForUpdate(); if (!updateInfo?.version) return; }
-  const notes = updateInfo.notes ? `\n\nNouveautés :\n${updateInfo.notes}` : '';
-  if (!(await confirmDialog(`Installer Kane Explorer ${updateInfo.version} (version actuelle : ${updateInfo.current}) ? Kane redémarrera automatiquement.${notes}`, 'Mettre à jour', false))) return;
+  const notes = updateInfo.notes ? `
+
+Nouveautés :
+${updateInfo.notes}` : '';
+  if (!silent && !(await confirmDialog(`Installer Kane Explorer ${updateInfo.version} (version actuelle : ${updateInfo.current}) ? Kane redémarrera automatiquement.${notes}`, 'Mettre à jour', false))) return;
+  store.set('justUpdated', { from: updateInfo.current, to: updateInfo.version, notes: updateInfo.notes || '' });
   toast('Téléchargement de la mise à jour…');
   const off = await window.__TAURI__.event.listen('update-progress', (ev) => {
     const btn = $('update-btn');
     if (btn) btn.querySelector('span').textContent = `Téléchargement ${ev.payload} %`;
   });
   try { await invoke('install_update'); }
-  catch (err) { toast(cleanError(err), 'error'); off(); renderUpdateButton(); }
+  catch (err) { store.set('justUpdated', null); toast(cleanError(err), 'error'); off(); renderUpdateButton(); }
 }
 
 /* ---------------- Accueil : sélection des cartes ---------------- */
@@ -1466,8 +1504,14 @@ function featuresInit() {
   $('update-btn').onclick = installUpdate;
   // Vérification discrète des mises à jour (fenêtre principale, puis toutes les 6 h)
   if (isMainWindow) {
-    setTimeout(() => checkForUpdate(true), 5000);
-    setInterval(() => checkForUpdate(true), 6 * 3600 * 1000);
+    setTimeout(announceInstalledUpdate, 1500);
+    if (prefs.updateMode !== 'manual') {
+      setTimeout(async () => {
+        const info = await checkForUpdate(prefs.updateMode !== 'auto');
+        if (prefs.updateMode === 'auto' && info?.version) { toast(`Mise à jour ${info.version} : installation…`); installUpdate(true); }
+      }, 5000);
+      setInterval(() => { if (prefs.updateMode !== 'manual') checkForUpdate(true); }, 6 * 3600 * 1000);
+    }
   }
   $('net-btn').onclick = networkMenu;
   let lastNet = 0;

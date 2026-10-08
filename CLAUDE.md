@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.7** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.8** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -50,6 +50,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
 | `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoMoves`, `recordPaste`) |
 | `src/archive.js` | Archives comme dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`) |
+| `src/backup.js` | Sauvegarde / restauration des réglages (`exportSettings`, `importSettings`, `restoreSettings`) : fichier `Documents\Kane-reglages-AAAA-MM-JJ.json` = tout `kane.*` du localStorage sauf `BACKUP_SKIP` (onglets, étagère, récents, fenêtres…) ; Options → Sauvegarde des réglages |
 | `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
@@ -68,7 +69,7 @@ Installateur NSIS ~2 Mo, en français.
 (pour que features.js soit chargé). Pour modifier main.js en masse, utiliser de petits scripts Node
 (remplacements exacts) : c'est ce qui a été fait (voir §9).
 
-Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js`. `features.js` appelle `toolItemMenu` /
+Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js` → `backup.js`. `features.js` appelle `toolItemMenu` /
 `toolBlankMenu` (tools.js) et `togglePins` / `pinMany` / `unpinFolder` (pins.js) ; `main.js` appelle `quickPlaces`,
 `quickItemHtml`, `homePinnedHtml`, `pinDropped`, `shelfDropped`, `PIN_ZONE`, `SHELF_ZONE`, `openQuickEditor`.
 
@@ -156,6 +157,8 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   nouveau dossier). Ctrl/Maj + clic sélectionnent sans ouvrir.
 - **Menu caché du logo** (features.js, après `networkMenu`) : un clic sur « Kane Explorer » (`.sidebar .brand`) ouvre un menu avec le choix de la
   carte réseau (`networkMenuItems`, les mêmes actions que le bouton réseau du bas) puis quelques outils (palette, sessions, nouvelle fenêtre, options).
+- **Thème selon l'heure** (`prefs.theme === 'schedule'`, `dayFrom`/`dayTo`, `resolvedTheme()` dans main.js) : clair entre les deux heures
+  (la plage peut passer minuit), sombre sinon ; `applyLook` est rappelée toutes les 30 s.
 - **Fenêtre** : taille par défaut 1200×1190 (zone de contenu ; minimum 720×480), réduite et recentrée au démarrage (`setup` de lib.rs)
   si l'écran est plus petit (hauteur d'écran − 110, largeur − 40).
 - **Réseau** : liste via `Get-NetAdapter -Physical` (PowerShell, sans admin) ; bascule via PowerShell **élevé**
@@ -164,6 +167,11 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 
 ## 6. Mises à jour et publication
 
+- **Notification et mode** (features.js, section « Mises à jour ») : `prefs.updateMode` = `notify` (défaut : notification « Kane Explorer X est
+  disponible » avec Mettre à jour / Nouveautés / Plus tard, une seule fois par version via `kane.updateNotified`, + bouton bleu), `auto`
+  (installe au démarrage, `installUpdate(true)` sans confirmation) ou `manual` (aucune vérification automatique). Avant d'installer,
+  `kane.justUpdated {from,to,notes}` est mémorisé : au démarrage suivant, `announceInstalledUpdate` affiche « X installée » + nouveautés
+  (les nouveautés = le texte `-Notes` de `release.ps1`, donc le soigner). Options → Mises à jour.
 - `tauri-plugin-updater`, point de terminaison
   `https://github.com/Kaynegiordano/kane-explorer/releases/latest/download/latest.json`, installation `passive`.
 - Commandes `check_update` / `install_update` (lib.rs). Vérification 5 s après le démarrage puis toutes les 6 h
@@ -201,6 +209,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.5 | Zips Deflate64 lus par la bibliothèque `zip` (tar.exe les refuse) ; glisser vers un bouton de la barre des tâches = la fenêtre passe au premier plan |
 | 1.2.6 | Lecteurs branchés / retirés détectés automatiquement (barre latérale, accueil) ; fenêtre par défaut 1400×880 |
 | 1.2.7 | Onglets déplaçables au glisser (et détachables en fenêtre) ; dossiers et lecteurs s'ouvrent en un clic (nouveau mode par défaut) ; fenêtre par défaut 1200×1190 ; menu caché sur le logo (carte réseau, outils) |
+| 1.2.8 | Notification de mise à jour (Mettre à jour / Nouveautés / Plus tard), mode automatique, message après installation ; thème automatique selon l'heure ; sauvegarde et restauration des réglages |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
