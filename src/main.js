@@ -38,7 +38,7 @@ const prefs = {
   previewWidth: store.get('previewWidth', 340),
   // Options des dossiers (équivalents de l'Explorateur)
   openFolders: store.get('openFolders', 'same'),     // same | tab | window
-  clickMode: store.get('clickMode', 'double'),       // double | single
+  clickMode: store.get('clickMode', 'folders'),      // folders | single | double
   startup: store.get('startup', 'restore'),          // restore | home | custom
   startPath: store.get('startPath', ''),
   showExt: store.get('showExt', true),
@@ -52,7 +52,7 @@ const prefs = {
   density: store.get('density', 'comfortable'),      // comfortable | compact     // images / vidéos : visionneuse de Kane (navigation image par image)
 };
 const DEFAULT_OPTIONS = {
-  openFolders: 'same', clickMode: 'double', startup: 'restore', startPath: '',
+  openFolders: 'same', clickMode: 'folders', startup: 'restore', startPath: '',
   showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, openArchives: true, theme: 'auto', accent: '', density: 'comfortable',
 };
 
@@ -391,8 +391,63 @@ els.tabs.addEventListener('mousedown', (ev) => {
   if (!el) return;
   const t = tabs.find((x) => x.id === +el.dataset.id);
   if (ev.button === 1) { ev.preventDefault(); closeTab(t); return; }
-  if (ev.button === 0 && !ev.target.closest('.close')) switchTab(t);
+  if (ev.button === 0 && !ev.target.closest('.close')) {
+    switchTab(t);
+    tabDrag = { t, x: ev.clientX, y: ev.clientY, on: false };
+  }
 });
+
+/* Glisser un onglet : le déplacer dans la barre, ou le tirer vers le bas / le haut pour l'ouvrir dans une nouvelle fenêtre. */
+let tabDrag = null;
+const TAB_DETACH = 55; // distance verticale à partir de laquelle l'onglet devient une fenêtre
+
+function tabDragMove(ev) {
+  if (!tabDrag) return;
+  if (!(ev.buttons & 1)) { tabDragEnd(false); return; }
+  const dx = ev.clientX - tabDrag.x, dy = ev.clientY - tabDrag.y;
+  const nodes = [...els.tabs.querySelectorAll('.tab')];
+  if (!tabDrag.on) {
+    if (Math.hypot(dx, dy) < 6 || nodes.length !== tabs.length) return;
+    tabDrag.on = true;
+    tabDrag.from = tabs.indexOf(tabDrag.t);
+    tabDrag.rects = nodes.map((n) => n.getBoundingClientRect());
+    document.body.classList.add('tab-dragging');
+    nodes[tabDrag.from].classList.add('dragging');
+  }
+  const { from, rects } = tabDrag;
+  const detach = Math.abs(dy) > TAB_DETACH && tabs.length > 1;
+  nodes[from].style.transform = `translate(${dx}px, ${detach ? dy : 0}px)`;
+  nodes[from].classList.toggle('detach', detach);
+  const centre = rects[from].left + rects[from].width / 2 + dx;
+  let target = 0;
+  rects.forEach((r, i) => { if (i !== from && r.left + r.width / 2 < centre) target++; });
+  tabDrag.target = target;
+  const step = rects[from].width + (rects[1] ? Math.max(0, rects[1].left - rects[0].right) : 2);
+  nodes.forEach((n, i) => {
+    if (i === from) return;
+    const shift = from < target && i > from && i <= target ? -step : from > target && i >= target && i < from ? step : 0;
+    n.style.transform = shift ? `translateX(${shift}px)` : '';
+  });
+}
+
+function tabDragEnd(commit) {
+  const d = tabDrag;
+  tabDrag = null;
+  if (!d?.on) return;
+  document.body.classList.remove('tab-dragging');
+  const detached = commit && els.tabs.querySelector('.tab.detach');
+  if (detached) {
+    winCall('new_window', { path: d.t.path });
+    closeTab(d.t);
+  } else if (commit && d.target !== d.from) {
+    tabs.splice(d.from, 1);
+    tabs.splice(d.target, 0, d.t);
+    saveTabs();
+  } else renderTabs();
+}
+document.addEventListener('mousemove', tabDragMove);
+document.addEventListener('mouseup', () => tabDragEnd(true));
+window.addEventListener('blur', () => tabDragEnd(false));
 els.tabs.addEventListener('click', (ev) => {
   const c = ev.target.closest('[data-close]');
   if (c) closeTab(tabs.find((x) => x.id === +c.dataset.close));
@@ -493,6 +548,7 @@ function itemHtml(e, i) {
   if (i === tab.focus) c += ' focus';
   if (shared.cut.has(e.path)) c += ' cut';
   if (e.hidden) c += ' hidden-file';
+  if (e.is_dir) c += ' dir';
   if (prefs.view === 'grid') {
     const visual = weVisual(e) || (isApp(e)
       ? `<img class="thumb icon" src="${thumbUrl(e, 64, 'i')}" decoding="async" draggable="false" alt="">`
@@ -756,6 +812,16 @@ async function openEntry(e) {
 }
 
 /** Carte de l'accueil : un dossier s'ouvre dans Kane, un fichier épinglé avec son application. */
+const EXEC_EXT = set('exe msi bat cmd com scr ps1 vbs jar');
+/** Cet élément s'ouvre-t-il d'un seul clic ? Dossiers et lecteurs : oui (sauf mode « double-clic ») ; fichiers : seulement en mode « tout en un clic », hors exécutables. */
+function clicksOpen(e) {
+  const m = prefs.clickMode;
+  if (m === 'double' || !e) return false;
+  if (e.is_dir) return true;
+  return m === 'single' && !EXEC_EXT.has(e.ext || '');
+}
+const cardEntry = (card) => ({ is_dir: !card.dataset.file, ext: extOf(card.dataset.path || '') });
+
 function openCard(card) {
   if (card.dataset.file) invoke('open_path', { path: card.dataset.path }).catch((e) => toast(cleanError(e), 'error'));
   else navigate(card.dataset.path);
@@ -1265,7 +1331,7 @@ els.content.addEventListener('click', (ev) => {
   }
   const card = ev.target.closest('.card');
   if (card) {
-    if (prefs.clickMode === 'single') openCard(card);
+    if (clicksOpen(cardEntry(card))) { if (ev.detail < 2) openCard(card); }
     else selectCard(card);
     return;
   }
@@ -1280,15 +1346,14 @@ els.content.addEventListener('click', (ev) => {
   tab.focus = i;
   paintSelection();
   // Option « Ouvrir les éléments en un seul clic »
-  if (prefs.clickMode === 'single' && !ev.ctrlKey && !ev.shiftKey) openEntry(tab.items[i]);
+  if (ev.detail < 2 && !ev.ctrlKey && !ev.shiftKey && clicksOpen(tab.items[i])) openEntry(tab.items[i]);
 });
 
 els.content.addEventListener('dblclick', (ev) => {
-  if (prefs.clickMode === 'single') return;
   const card = ev.target.closest('.card');
-  if (card) { openCard(card); return; }
+  if (card) { if (!clicksOpen(cardEntry(card))) openCard(card); return; }
   const it = ev.target.closest('.item');
-  if (it) openEntry(tab.items[+it.dataset.i]);
+  if (it && !clicksOpen(tab.items[+it.dataset.i])) openEntry(tab.items[+it.dataset.i]);
 });
 
 /* ----- Glisser-déposer ----- */
@@ -1768,7 +1833,8 @@ function openOptions() {
       ${radio('openFolders', 'window', 'Dans une nouvelle fenêtre')}
     </fieldset>
     <fieldset><legend>Cliquer sur les éléments</legend>
-      ${radio('clickMode', 'single', 'Ouvrir en un seul clic (souligné au survol)')}
+      ${radio('clickMode', 'folders', 'Dossiers et lecteurs en un clic, fichiers en double-clic')}
+      ${radio('clickMode', 'single', 'Tout en un seul clic, sauf les exécutables (souligné au survol)')}
       ${radio('clickMode', 'double', 'Ouvrir en double-cliquant (simple clic pour sélectionner)')}
     </fieldset>
     <fieldset><legend>Au démarrage, ouvrir</legend>
@@ -1821,6 +1887,7 @@ function openOptions() {
 
   const apply = () => {
     document.body.classList.toggle('single-click', prefs.clickMode === 'single');
+    document.body.classList.toggle('single-folders', prefs.clickMode === 'folders');
     document.body.classList.toggle('no-anim', !prefs.animations);
     applyLook();
     previewKey = '';
@@ -1898,6 +1965,7 @@ $('btn-options').onclick = openOptions;
 
 window.addEventListener('DOMContentLoaded', async () => {
   document.body.classList.toggle('single-click', prefs.clickMode === 'single');
+    document.body.classList.toggle('single-folders', prefs.clickMode === 'folders');
   document.body.classList.toggle('no-anim', !prefs.animations);
   await loadSidebar();
   // Dossier de départ selon l'option « Au démarrage » (ou celui demandé par une nouvelle fenêtre)

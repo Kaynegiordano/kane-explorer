@@ -306,3 +306,19 @@ em.stars, .stars { font-style: normal; color: #f5b301; letter-spacing: -1px; }
 .ses-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); }
 .ses-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .ses-info span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Glisser un onglet */
+.tab { transition: background-color .14s ease, color .14s ease, transform .16s var(--ease, ease); }
+body.tab-dragging { user-select: none; cursor: grabbing; }
+body.tab-dragging .tabs { overflow: visible; }
+.tab.dragging { z-index: 30; transition: none; background: var(--panel); color: var(--text); border-color: var(--border); box-shadow: 0 6px 18px rgba(0, 0, 0, .25); cursor: grabbing; }
+.tab.dragging.detach { opacity: .75; border-color: var(--accent); }
+body.no-anim .tab { transition: none; }
+
+/* Dossiers et lecteurs en un clic : soulignement au survol (comme le mode « tout en un clic », limité aux dossiers) */
+body.single-folders .item.dir:hover .name span, body.single-folders .item.dir:hover .label { text-decoration: underline; cursor: pointer; }
+body.single-folders .card, body.single-click .card { cursor: pointer; }
+
+/* Un clic sur « Kane Explorer » ouvre le menu caché (carte réseau, outils) */
+.sidebar .brand { cursor: pointer; border-radius: 8px; transition: background-color .14s ease; }
+.sidebar .brand:hover { background: var(--hover); }

@@ -286,13 +286,18 @@ fn drive_roots() -> Vec<String> {
 /// Lecteurs disponibles avec leur espace libre.
 #[tauri::command]
 async fn drives() -> Vec<Drive> {
-    drive_roots()
-        .into_iter()
-        .map(|path| {
-            let (label, total, free) = drive_info(&path);
-            Drive { letter: path[..1].to_string(), label, path, total, free }
-        })
-        .collect()
+    // Hors du fil asynchrone : un lecteur réseau ou une carte qui répond lentement ne doit rien bloquer
+    tauri::async_runtime::spawn_blocking(|| {
+        drive_roots()
+            .into_iter()
+            .map(|path| {
+                let (label, total, free) = drive_info(&path);
+                Drive { letter: path[..1].to_string(), label, path, total, free }
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Ouvre un fichier avec son application par défaut.
@@ -1012,6 +1017,19 @@ pub fn run() {
                     }
                 });
             }
+            // Fenêtre par défaut haute (1200×1190) : réduite si l'écran est plus petit, puis recentrée
+            if let Some(w) = app.get_webview_window("main") {
+                if let (Ok(Some(m)), Ok(size)) = (w.current_monitor(), w.inner_size()) {
+                    let s = m.scale_factor();
+                    let (mw, mh) = (m.size().width as f64 / s, m.size().height as f64 / s);
+                    let (ww, wh) = (size.width as f64 / s, size.height as f64 / s);
+                    let (nw, nh) = (ww.min(mw - 40.0), wh.min(mh - 110.0));
+                    if nw < ww || nh < wh {
+                        let _ = w.set_size(tauri::LogicalSize::new(nw, nh));
+                        let _ = w.center();
+                    }
+                }
+            }
             // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
             #[cfg(windows)]
             {
@@ -1020,7 +1038,7 @@ pub fn run() {
                     use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
                     let mut last = unsafe { GetLogicalDrives() };
                     loop {
-                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        std::thread::sleep(std::time::Duration::from_millis(500));
                         let now = unsafe { GetLogicalDrives() };
                         if now != last {
                             last = now;

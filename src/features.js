@@ -1226,7 +1226,7 @@ async function switchNetwork(target) {
   } catch (err) { toast(cleanError(err), 'error'); }
 }
 
-function networkMenu() {
+function networkMenuItems() {
   // Une entrée par carte disponible (Wi-Fi, Ethernet, adaptateur USB branché...)
   const ico = (a) => (a.kind === 'wifi' ? '📶' : '🔌');
   const items = netAdapters.map((a) => {
@@ -1240,7 +1240,7 @@ function networkMenu() {
   const toggles = netAdapters.map((a) => a.status === 'Disabled'
     ? { label: `Activer « ${esc(a.name)} »`, run: () => switchNetwork(`enable:${a.name}`) }
     : { label: `Désactiver « ${esc(a.name)} »`, run: () => switchNetwork(`disable:${a.name}`) });
-  const list = [
+  return [
     ...items,
     { label: 'Activer toutes les cartes', disabled: netAdapters.every((a) => a.status !== 'Disabled'), run: () => switchNetwork('all') },
     '-',
@@ -1248,9 +1248,30 @@ function networkMenu() {
     '-',
     { label: 'Paramètres réseau de Windows', run: () => winCall('open_path', { path: 'ms-settings:network' }) },
   ];
+}
+
+function networkMenu() {
+  const list = networkMenuItems();
   const r = $('net-btn').getBoundingClientRect();
   showMenu(r.left + 8, r.top - 8 - list.length * 33, list);
 }
+
+/* L'astuce : un clic sur « Kane Explorer » (logo, en haut de la barre latérale) ouvre un menu caché :
+   le choix de la carte réseau, sans quitter le dossier ouvert, et quelques outils peu conventionnels. */
+document.querySelector('.sidebar .brand').addEventListener('click', () => {
+  const r = document.querySelector('.sidebar .brand').getBoundingClientRect();
+  loadNetwork(); // état à jour pour la prochaine ouverture
+  showMenu(r.left + 10, r.bottom + 2, [
+    { label: '<b>Carte réseau</b>', disabled: true },
+    ...networkMenuItems(),
+    '-',
+    { label: '<b>Outils</b>', disabled: true },
+    { label: 'Palette de commandes', kbd: 'Ctrl+K', run: () => paletteOpen() },
+    { label: 'Sessions d’onglets…', run: openSessionsManager },
+    { label: 'Nouvelle fenêtre', kbd: 'Ctrl+N', run: () => winCall('new_window', { path: tab.path }) },
+    { label: 'Options des dossiers…', kbd: 'Ctrl+,', run: openOptions },
+  ]);
+});
 
 // Carte branchée / débranchée / activée : mise à jour automatique (signal envoyé par Kane)
 window.__TAURI__.event.listen('network-changed', () => { setTimeout(loadNetwork, 800); });
