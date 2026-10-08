@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.5** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.6** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -142,6 +142,11 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   Écrit par l'installateur (question en fin d'installation) ou par Options → « Explorateur par défaut ».
   La désinstallation rétablit l'Explorateur. « Ouvrir dans l'Explorateur Windows » appelle `explorer.exe` directement.
 - **Instance unique** : `tauri-plugin-single-instance` → un nouveau lancement ouvre une nouvelle fenêtre.
+- **Lecteurs branchés / retirés** (`setup` de lib.rs) : un fil compare `GetLogicalDrives()` toutes les 1,5 s ; au changement il autorise le
+  nouveau lecteur dans le protocole d'assets et émet `drives-changed` ; `features.js` recharge la barre latérale, rafraîchit l'accueil et
+  renvoie à l'accueil si le lecteur affiché a disparu. Banc d'essai : `subst Y: <dossier>` / `subst Y: /d` (pas de matériel nécessaire).
+  Limite : une carte insérée dans un lecteur de cartes dont la lettre existe déjà ne change pas le masque.
+- **Fenêtre** : taille par défaut 1400×880 (minimum 720×480).
 - **Réseau** : liste via `Get-NetAdapter -Physical` (PowerShell, sans admin) ; bascule via PowerShell **élevé**
   (`ShellExecuteW runas`) avec cibles `only:<nom>`, `enable:<nom>`, `disable:<nom>`, `all`. Détection des
   branchements : `GetIfTable2` toutes les 2 s → évènement `network-changed`.
@@ -183,6 +188,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.3 | Comparaison d'images : zoom et déplacement synchronisés (molette, glisser, double-clic, barre de zoom, + - F) |
 | 1.2.4 | Menu « Trier par » (clic droit dans le vide) ; glisser-déposer depuis une archive vers n'importe quelle fenêtre (extraction temporaire) |
 | 1.2.5 | Zips Deflate64 lus par la bibliothèque `zip` (tar.exe les refuse) ; glisser vers un bouton de la barre des tâches = la fenêtre passe au premier plan |
+| 1.2.6 | Lecteurs branchés / retirés détectés automatiquement (barre latérale, accueil) ; fenêtre par défaut 1400×880 |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

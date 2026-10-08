@@ -2027,7 +2027,7 @@ dependencies = [
 
 [[package]]
 name = "kane-explorer"
-version = "1.2.5"
+version = "1.2.6"
 dependencies = [
  "dirs 6.0.0",
  "notify",

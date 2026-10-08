@@ -1254,6 +1254,12 @@ function networkMenu() {
 
 // Carte branchée / débranchée / activée : mise à jour automatique (signal envoyé par Kane)
 window.__TAURI__.event.listen('network-changed', () => { setTimeout(loadNetwork, 800); });
+// Lecteur branché ou retiré : barre latérale et accueil se mettent à jour tout seuls
+window.__TAURI__.event.listen('drives-changed', async () => {
+  await loadSidebar();
+  if (tab?.path === HOME) render();
+  else if (/^[A-Za-z]:/.test(tab?.path || '') && !(await invoke('path_states', { paths: [tab.path.slice(0, 3)] }))[0]) navigate(HOME);
+});
 
 /* ---------------- Glisser-déposer entre fenêtres : voir où l'on dépose ---------------- */
 

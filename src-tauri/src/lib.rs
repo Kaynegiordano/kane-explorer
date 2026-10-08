@@ -1012,6 +1012,27 @@ pub fn run() {
                     }
                 });
             }
+            // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
+            #[cfg(windows)]
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+                    let mut last = unsafe { GetLogicalDrives() };
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        let now = unsafe { GetLogicalDrives() };
+                        if now != last {
+                            last = now;
+                            let scope = handle.asset_protocol_scope();
+                            for root in drive_roots() {
+                                let _ = scope.allow_directory(&root, true);
+                            }
+                            let _ = handle.emit("drives-changed", ());
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
