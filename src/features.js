@@ -1194,6 +1194,7 @@ const ADAPTER_STATUS = { Up: 'connectée', Disconnected: 'non connectée', Disab
 
 function renderNetwork() {
   const btn = $('net-btn');
+  if (!btn) return; // le bouton du bas a été retiré : le choix de la carte est dans le menu du logo « Kane Explorer »
   const { active } = netState();
   const up = netAdapters.filter((a) => a.status === 'Up');
   btn.hidden = false; // toujours visible, même si aucune carte n'est détectée
@@ -1248,12 +1249,6 @@ function networkMenuItems() {
     '-',
     { label: 'Paramètres réseau de Windows', run: () => winCall('open_path', { path: 'ms-settings:network' }) },
   ];
-}
-
-function networkMenu() {
-  const list = networkMenuItems();
-  const r = $('net-btn').getBoundingClientRect();
-  showMenu(r.left + 8, r.top - 8 - list.length * 33, list);
 }
 
 /* L'astuce : un clic sur « Kane Explorer » (logo, en haut de la barre latérale) ouvre un menu caché :
@@ -1500,7 +1495,7 @@ document.addEventListener('keydown', (ev) => {
 
 function featuresInit() {
   els.search.placeholder = 'Rechercher… (type:image note:4 p:prompt)';
-  $('btn-options').insertAdjacentHTML('beforebegin', '<button class="nav-item update-btn" id="update-btn" hidden></button><button class="nav-item net-btn" id="net-btn" hidden></button>');
+  $('btn-options').insertAdjacentHTML('beforebegin', '<button class="nav-item update-btn" id="update-btn" hidden></button>');
   $('update-btn').onclick = installUpdate;
   // Vérification discrète des mises à jour (fenêtre principale, puis toutes les 6 h)
   if (isMainWindow) {
@@ -1513,7 +1508,6 @@ function featuresInit() {
       setInterval(() => { if (prefs.updateMode !== 'manual') checkForUpdate(true); }, 6 * 3600 * 1000);
     }
   }
-  $('net-btn').onclick = networkMenu;
   let lastNet = 0;
   window.addEventListener('focus', () => { if (Date.now() - lastNet > 15000) { lastNet = Date.now(); loadNetwork(); } });
   renderSidebar();

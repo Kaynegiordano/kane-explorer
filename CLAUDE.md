@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.8** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.2.9** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -104,6 +104,9 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   Deflate64 (« Unsupported ZIP compression method (9) », zips de 7-Zip/WinRAR…) ; repli sur `tar.exe` si la bibliothèque échoue
   (méthode inconnue). Les autres formats (7z, rar, tar, iso) restent sur `tar.exe`. `unzip_here` passe aussi par `archive_extract`.
   Banc d'essai : un vrai zip Deflate64 (RevoUninstaller_Portable.zip, Téléchargements).
+- **Tri par dossier** (`kSortBy` = `kane.sortByFolder`, `syncSort` / `setSort`, main.js) : `prefs.sortKey / sortDir` reflètent le tri du dossier de
+  l'onglet actif (`syncSort` au début de `computeItems`) ; en-têtes et menu « Trier par » passent par `setSort(key, dir)` qui n'écrit que pour ce
+  dossier (clé = chemin en minuscules ; nom croissant = pas d'entrée ; 800 dossiers max). Les anciens `kane.sortKey/sortDir` globaux sont supprimés.
 - **Menu « Trier par »** (`sortMenu`, main.js) : sous-menu du clic droit dans le vide (un second `showMenu` à `menuPos`), toutes les
   colonnes de `COLS`, croissant/décroissant, dossiers en premier.
 - **Animations** : `creative.css` (fin du fichier), désactivables (Options → Animations = classe `body.no-anim`) et
@@ -155,8 +158,8 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   clic, fichiers en double-clic ; `single` = tout en un clic sauf `EXEC_EXT` (exe, msi, bat, cmd, com, scr, ps1, vbs, jar) ; `double` = comme avant.
   Le `click` n'ouvre que si `ev.detail < 2` (sinon le 2e clic d'un double-clic ouvrirait l'élément qui se trouve sous le curseur dans le
   nouveau dossier). Ctrl/Maj + clic sélectionnent sans ouvrir.
-- **Menu caché du logo** (features.js, après `networkMenu`) : un clic sur « Kane Explorer » (`.sidebar .brand`) ouvre un menu avec le choix de la
-  carte réseau (`networkMenuItems`, les mêmes actions que le bouton réseau du bas) puis quelques outils (palette, sessions, nouvelle fenêtre, options).
+- **Menu caché du logo** (features.js, après `networkMenuItems`) : un clic sur « Kane Explorer » (`.sidebar .brand`) ouvre un menu avec le choix de la
+  carte réseau (`networkMenuItems` ; le bouton réseau du bas de la barre latérale a été retiré, `renderNetwork` sort si `#net-btn` est absent) puis quelques outils (palette, sessions, nouvelle fenêtre, options).
 - **Thème selon l'heure** (`prefs.theme === 'schedule'`, `dayFrom`/`dayTo`, `resolvedTheme()` dans main.js) : clair entre les deux heures
   (la plage peut passer minuit), sombre sinon ; `applyLook` est rappelée toutes les 30 s.
 - **Fenêtre** : taille par défaut 1200×1190 (zone de contenu ; minimum 720×480), réduite et recentrée au démarrage (`setup` de lib.rs)
@@ -210,6 +213,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.6 | Lecteurs branchés / retirés détectés automatiquement (barre latérale, accueil) ; fenêtre par défaut 1400×880 |
 | 1.2.7 | Onglets déplaçables au glisser (et détachables en fenêtre) ; dossiers et lecteurs s'ouvrent en un clic (nouveau mode par défaut) ; fenêtre par défaut 1200×1190 ; menu caché sur le logo (carte réseau, outils) |
 | 1.2.8 | Notification de mise à jour (Mettre à jour / Nouveautés / Plus tard), mode automatique, message après installation ; thème automatique selon l'heure ; sauvegarde et restauration des réglages |
+| 1.2.9 | Tri mémorisé dossier par dossier (plus de tri global) ; bouton réseau du bas retiré (choix de la carte dans le menu du logo) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

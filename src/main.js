@@ -29,8 +29,8 @@ const store = {
 };
 
 const prefs = {
-  sortKey: store.get('sortKey', 'name'),
-  sortDir: store.get('sortDir', 1),
+  sortKey: 'name',   // tri du dossier affiché (voir syncSort : mémorisé dossier par dossier, kane.sortByFolder)
+  sortDir: 1,
   view: store.get('view', 'list'),
   showHidden: store.get('showHidden', false),
   showProtected: store.get('showProtected', false),
@@ -487,7 +487,30 @@ listen('dir-changed', (ev) => {
 
 /* ---------------- Rendu ---------------- */
 
+/* Tri mémorisé par dossier : changer le tri d'un dossier ne touche pas les autres (nom croissant par défaut). */
+let kSortBy = store.get('sortByFolder', {});
+try { localStorage.removeItem('kane.sortKey'); localStorage.removeItem('kane.sortDir'); } catch { /* ignoré */ }
+
+/** Applique à `prefs.sortKey / sortDir` le tri mémorisé pour le dossier de l'onglet actif. */
+function syncSort() {
+  const s = kSortBy[(tab?.path || '').toLowerCase()];
+  prefs.sortKey = s?.key || 'name';
+  prefs.sortDir = s?.dir || 1;
+}
+
+/** Change le tri du dossier affiché (et de lui seul). */
+function setSort(key, dir) {
+  const id = tab.path.toLowerCase();
+  prefs.sortKey = key; prefs.sortDir = dir;
+  if (key === 'name' && dir === 1) delete kSortBy[id]; else kSortBy[id] = { key, dir };
+  const ids = Object.keys(kSortBy);
+  if (ids.length > 800) delete kSortBy[ids[0]]; // les plus anciens s'effacent
+  store.set('sortByFolder', kSortBy);
+  render();
+}
+
 function computeItems() {
+  syncSort();
   const flt = parseFilter(tab.filter);
   const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && (prefs.showProtected || !e.protected) && matchFilter(e, flt));
   const { sortKey: k, sortDir: d } = prefs;
@@ -1297,9 +1320,10 @@ function itemMenu() {
 
 /** Sous-menu « Trier par » : toutes les colonnes (y compris celles de meta.js), l'ordre et les dossiers en premier. */
 function sortMenu() {
+  syncSort();
   const mark = (on) => (on ? '● ' : '  ');
-  const setKey = (k) => { savePref('sortKey', k); render(); };
-  const setDir = (d) => { savePref('sortDir', d); render(); };
+  const setKey = (k) => setSort(k, prefs.sortDir);
+  const setDir = (d) => setSort(prefs.sortKey, d);
   return [
     { label: mark(prefs.sortKey === 'name') + 'Nom', run: () => setKey('name') },
     ...Object.entries(COLS).map(([k, c]) => ({ label: mark(prefs.sortKey === k) + c.label, run: () => setKey(k) })),
@@ -1340,8 +1364,7 @@ els.content.addEventListener('click', (ev) => {
   const sortBtn = ev.target.closest('[data-sort]');
   if (sortBtn) {
     const k = sortBtn.dataset.sort;
-    if (prefs.sortKey === k) savePref('sortDir', -prefs.sortDir); else { savePref('sortKey', k); savePref('sortDir', 1); }
-    render();
+    setSort(k, prefs.sortKey === k ? -prefs.sortDir : 1);
     return;
   }
   const card = ev.target.closest('.card');
