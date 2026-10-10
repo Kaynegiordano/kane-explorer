@@ -1,6 +1,17 @@
 'use strict';
 
-const { invoke, convertFileSrc } = window.__TAURI__.core;
+const { invoke: rawInvoke, convertFileSrc } = window.__TAURI__.core;
+
+/* Appels au moteur suivis : si l'ouverture d'un dossier traîne, Kane propose de se débloquer (voir watchStuck dans features.js). */
+const pendingCalls = new Map();
+const WATCHED_CALLS = new Set(['list_dir', 'drives', 'places', 'path_states', 'dir_count', 'archive_list']);
+let callSeq = 0;
+function invoke(cmd, args) {
+  if (!WATCHED_CALLS.has(cmd)) return rawInvoke(cmd, args);
+  const id = ++callSeq;
+  pendingCalls.set(id, { cmd, at: Date.now(), path: args?.path || args?.archive || '' });
+  return rawInvoke(cmd, args).finally(() => pendingCalls.delete(id));
+}
 const { listen } = window.__TAURI__.event;
 const HOME = '::home';
 

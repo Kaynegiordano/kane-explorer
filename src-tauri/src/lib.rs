@@ -142,7 +142,10 @@ fn list_dir_sync(path: &str) -> Result<Vec<Entry>, String> {
 /// Nombre d'éléments d'un dossier (pour l'aperçu).
 #[tauri::command]
 async fn dir_count(path: String) -> Result<usize, String> {
-    Ok(fs::read_dir(&path).map_err(err)?.count())
+    blocking(move || -> Result<usize, String> {
+        Ok(fs::read_dir(&path).map_err(err)?.count())
+    })
+    .await?
 }
 
 /// État de chemins : 0 = introuvable, 1 = fichier, 2 = dossier (épinglés : éléments disparus, fichier ou dossier).
@@ -165,55 +168,62 @@ async fn path_states(paths: Vec<String>) -> Result<Vec<u8>, String> {
 /// Début d'un fichier texte pour l'aperçu. `None` si le fichier est binaire.
 #[tauri::command]
 async fn read_text(path: String, max: u64) -> Result<Option<String>, String> {
-    let mut buf = Vec::new();
-    fs::File::open(&path)
-        .map_err(err)?
-        .take(max)
-        .read_to_end(&mut buf)
-        .map_err(err)?;
-    // UTF-16 (fichiers .txt / .reg de Windows)
-    if buf.starts_with(&[0xFF, 0xFE]) {
-        let wide: Vec<u16> = buf[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
-        return Ok(Some(String::from_utf16_lossy(&wide)));
-    }
-    if buf.iter().take(8192).any(|&b| b == 0) {
-        return Ok(None);
-    }
-    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+    blocking(move || -> Result<Option<String>, String> {
+        let mut buf = Vec::new();
+        fs::File::open(&path)
+            .map_err(err)?
+            .take(max)
+            .read_to_end(&mut buf)
+            .map_err(err)?;
+        // UTF-16 (fichiers .txt / .reg de Windows)
+        if buf.starts_with(&[0xFF, 0xFE]) {
+            let wide: Vec<u16> = buf[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            return Ok(Some(String::from_utf16_lossy(&wide)));
+        }
+        if buf.iter().take(8192).any(|&b| b == 0) {
+            return Ok(None);
+        }
+        Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+    })
+    .await?
 }
 
 /// Dossiers personnels (Bureau, Documents, ...).
 #[tauri::command]
 async fn places() -> Vec<Place> {
-    // OneDrive (personnel et professionnel), en tête comme dans l'Explorateur
-    let mut out: Vec<Place> = Vec::new();
-    for var in ["OneDriveConsumer", "OneDriveCommercial", "OneDrive"] {
-        let Some(p) = std::env::var_os(var).map(PathBuf::from) else { continue };
-        if !p.is_dir() || out.iter().any(|x| x.path.eq_ignore_ascii_case(&p.to_string_lossy())) {
-            continue;
+    blocking(move || -> Vec<Place> {
+        // OneDrive (personnel et professionnel), en tête comme dans l'Explorateur
+        let mut out: Vec<Place> = Vec::new();
+        for var in ["OneDriveConsumer", "OneDriveCommercial", "OneDrive"] {
+            let Some(p) = std::env::var_os(var).map(PathBuf::from) else { continue };
+            if !p.is_dir() || out.iter().any(|x| x.path.eq_ignore_ascii_case(&p.to_string_lossy())) {
+                continue;
+            }
+            let folder = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            out.push(Place { name: folder.replace("OneDrive -", "OneDrive ·"), path: p.to_string_lossy().into_owned(), kind: "onedrive".into() });
         }
-        let folder = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        out.push(Place { name: folder.replace("OneDrive -", "OneDrive ·"), path: p.to_string_lossy().into_owned(), kind: "onedrive".into() });
-    }
-    let list = [
-        ("Bureau", dirs::desktop_dir(), "desktop"),
-        ("Téléchargements", dirs::download_dir(), "downloads"),
-        ("Documents", dirs::document_dir(), "documents"),
-        ("Images", dirs::picture_dir(), "pictures"),
-        ("Captures d'écran", screenshots_dir(), "screenshots"),
-        ("Musique", dirs::audio_dir(), "music"),
-        ("Vidéos", dirs::video_dir(), "videos"),
-        ("Dossier personnel", dirs::home_dir(), "home"),
-    ];
-    out.extend(list.into_iter().filter_map(|(name, p, kind)| {
-        let p = p?;
-        p.exists().then(|| Place {
-            name: name.into(),
-            path: p.to_string_lossy().into_owned(),
-            kind: kind.into(),
-        })
-    }));
-    out
+        let list = [
+            ("Bureau", dirs::desktop_dir(), "desktop"),
+            ("Téléchargements", dirs::download_dir(), "downloads"),
+            ("Documents", dirs::document_dir(), "documents"),
+            ("Images", dirs::picture_dir(), "pictures"),
+            ("Captures d'écran", screenshots_dir(), "screenshots"),
+            ("Musique", dirs::audio_dir(), "music"),
+            ("Vidéos", dirs::video_dir(), "videos"),
+            ("Dossier personnel", dirs::home_dir(), "home"),
+        ];
+        out.extend(list.into_iter().filter_map(|(name, p, kind)| {
+            let p = p?;
+            p.exists().then(|| Place {
+                name: name.into(),
+                path: p.to_string_lossy().into_owned(),
+                kind: kind.into(),
+            })
+        }));
+        out
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Dossier des captures d'écran de Windows (Win + Impr. écran, Outil Capture).
@@ -303,41 +313,53 @@ async fn drives() -> Vec<Drive> {
 /// Ouvre un fichier avec son application par défaut.
 #[tauri::command]
 async fn open_path(path: String) -> Result<(), String> {
-    opener::open(&path).map_err(err)
+    blocking(move || -> Result<(), String> {
+        opener::open(&path).map_err(err)
+    })
+    .await?
 }
 
 /// Ouvre l'explorateur Windows en sélectionnant l'élément.
 #[tauri::command]
 async fn reveal_path(path: String) -> Result<(), String> {
-    opener::reveal(&path).map_err(err)
+    blocking(move || -> Result<(), String> {
+        opener::reveal(&path).map_err(err)
+    })
+    .await?
 }
 
 /// Ouvre Windows Terminal (ou PowerShell) dans le dossier.
 #[tauri::command]
 async fn open_terminal(path: String) -> Result<(), String> {
-    use std::process::Command;
-    if Command::new("wt").args(["-d", &path]).spawn().is_ok() {
-        return Ok(());
-    }
-    Command::new("powershell").arg("-NoExit").current_dir(&path).spawn().map(|_| ()).map_err(err)
+    blocking(move || -> Result<(), String> {
+        use std::process::Command;
+        if Command::new("wt").args(["-d", &path]).spawn().is_ok() {
+            return Ok(());
+        }
+        Command::new("powershell").arg("-NoExit").current_dir(&path).spawn().map(|_| ()).map_err(err)
+    })
+    .await?
 }
 
 #[tauri::command]
 async fn rename_entry(path: String, new_name: String) -> Result<String, String> {
-    let new_name = new_name.trim();
-    if new_name.is_empty() || new_name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
-        return Err("Nom invalide. Ces caractères sont interdits : \\ / : * ? \" < > |".into());
-    }
-    let src = PathBuf::from(&path);
-    let parent = src.parent().ok_or("Impossible de renommer cet élément")?;
-    let target = parent.join(new_name);
-    // Autorise un simple changement de casse (fichier.txt -> Fichier.txt)
-    let same = target.to_string_lossy().to_lowercase() == path.to_lowercase();
-    if target.exists() && !same {
-        return Err(format!("« {new_name} » existe déjà dans ce dossier"));
-    }
-    fs::rename(&src, &target).map_err(err)?;
-    Ok(target.to_string_lossy().into_owned())
+    blocking(move || -> Result<String, String> {
+        let new_name = new_name.trim();
+        if new_name.is_empty() || new_name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+            return Err("Nom invalide. Ces caractères sont interdits : \\ / : * ? \" < > |".into());
+        }
+        let src = PathBuf::from(&path);
+        let parent = src.parent().ok_or("Impossible de renommer cet élément")?;
+        let target = parent.join(new_name);
+        // Autorise un simple changement de casse (fichier.txt -> Fichier.txt)
+        let same = target.to_string_lossy().to_lowercase() == path.to_lowercase();
+        if target.exists() && !same {
+            return Err(format!("« {new_name} » existe déjà dans ce dossier"));
+        }
+        fs::rename(&src, &target).map_err(err)?;
+        Ok(target.to_string_lossy().into_owned())
+    })
+    .await?
 }
 
 /// Exécute une opération de fichiers officielle de Windows sur un fil dédié.
@@ -380,9 +402,12 @@ fn unique_path(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
 
 #[tauri::command]
 async fn create_folder(parent: String) -> Result<String, String> {
-    let target = unique_path(Path::new(&parent), "Nouveau dossier", true);
-    fs::create_dir(&target).map_err(err)?;
-    Ok(target.to_string_lossy().into_owned())
+    blocking(move || -> Result<String, String> {
+        let target = unique_path(Path::new(&parent), "Nouveau dossier", true);
+        fs::create_dir(&target).map_err(err)?;
+        Ok(target.to_string_lossy().into_owned())
+    })
+    .await?
 }
 
 /// Colle (copie ou déplace) des éléments dans `dest` avec le moteur de l'Explorateur
@@ -433,25 +458,41 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
     Ok(created)
 }
 
-/// Surveille le dossier affiché par une fenêtre : lui envoie « dir-changed » à chaque modification.
+/// Surveille le dossier affiché par une fenêtre : lui envoie « dir-changed » quand il change.
+/// Hors du fil principal (un lecteur réseau lent ne fige rien), et au plus un signal toutes les 400 ms :
+/// une copie de milliers de fichiers ne noie plus l'interface sous les messages.
 #[tauri::command]
-fn watch_dir(app: tauri::AppHandle, window: WebviewWindow, state: State<WatchState>, path: Option<String>) -> Result<(), String> {
+async fn watch_dir(app: tauri::AppHandle, window: WebviewWindow, path: Option<String>) -> Result<(), String> {
     let label = window.label().to_string();
-    let mut map = state.0.lock().map_err(err)?;
-    map.remove(&label); // arrête l'ancienne surveillance de cette fenêtre
+    blocking(move || watch_dir_sync(app, label, path)).await?
+}
+
+fn watch_dir_sync(app: tauri::AppHandle, label: String, path: Option<String>) -> Result<(), String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let state = app.state::<WatchState>();
+    let old = state.0.lock().map_err(err)?.remove(&label); // arrête l'ancienne surveillance de cette fenêtre
+    drop(old); // (hors du verrou : l'arrêt d'un observateur peut prendre un instant)
     let Some(path) = path else { return Ok(()) };
     let target = path.clone();
     let dest = label.clone();
+    let emitter = app.clone();
+    let pending = Arc::new(AtomicBool::new(false));
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            if !matches!(ev.kind, notify::EventKind::Access(_)) {
-                let _ = app.emit_to(dest.as_str(), "dir-changed", &target);
-            }
+        let Ok(ev) = res else { return };
+        if matches!(ev.kind, notify::EventKind::Access(_)) || pending.swap(true, Ordering::AcqRel) {
+            return; // un signal est déjà prévu : il couvrira aussi ce changement
         }
+        let (app, dest, target, pending) = (emitter.clone(), dest.clone(), target.clone(), pending.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            pending.store(false, Ordering::Release);
+            let _ = app.emit_to(dest.as_str(), "dir-changed", &target);
+        });
     })
     .map_err(err)?;
     watcher.watch(Path::new(&path), RecursiveMode::NonRecursive).map_err(err)?;
-    map.insert(label, watcher);
+    state.0.lock().map_err(err)?.insert(label, watcher);
     Ok(())
 }
 
@@ -472,7 +513,7 @@ fn open_window(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
 /// Ouvre un dossier dans une nouvelle fenêtre Kane.
 #[tauri::command]
 async fn new_window(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    open_window(&app, &path)
+    std::thread::spawn(move || open_window(&app, &path)).join().map_err(|_| "Fenêtre impossible à ouvrir".to_string())?
 }
 
 /* ---------- Mises à jour (GitHub Releases, paquets signés) ---------- */
@@ -519,6 +560,26 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(err)?;
     app.restart();
+}
+
+/// Relance Kane depuis zéro : nouveau processus puis arrêt immédiat de celui-ci (marche même si le fil principal est bloqué).
+fn restart_now(app: &tauri::AppHandle) {
+    // Le nouveau Kane démarre une seconde plus tard, quand celui-ci a libéré l'« instance unique »
+    if let Ok(exe) = std::env::current_exe() {
+        let exe = exe.to_string_lossy().replace('\'', "''");
+        let _ = extras::quiet("powershell")
+            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command"])
+            .arg(format!("Start-Sleep -Milliseconds 900; Start-Process -FilePath '{exe}'"))
+            .spawn();
+    }
+    let _ = app;
+    std::process::exit(0);
+}
+
+/// Bouton « Redémarrer Kane » (menu du logo).
+#[tauri::command]
+async fn restart_app(app: tauri::AppHandle) {
+    restart_now(&app);
 }
 
 /* ---------- Lancement : dossier passé en argument (Windows + E, ouverture de dossiers) ---------- */
@@ -596,25 +657,33 @@ async fn set_default_explorer(enable: bool) -> Result<(), String> {
 /// Ouvre un dossier dans l'Explorateur Windows d'origine (même si Kane est l'explorateur par défaut).
 #[tauri::command]
 async fn open_in_windows_explorer(path: String) -> Result<(), String> {
-    let target = if path == HOME_ARG { "shell:MyComputerFolder".to_string() } else { path };
-    std::process::Command::new("explorer.exe").arg(target).spawn().map(|_| ()).map_err(err)
+    blocking(move || -> Result<(), String> {
+        let target = if path == HOME_ARG { "shell:MyComputerFolder".to_string() } else { path };
+        std::process::Command::new("explorer.exe").arg(target).spawn().map(|_| ()).map_err(err)
+    })
+    .await?
 }
 
 /// Ouvre la fenêtre officielle « Options des dossiers » de Windows.
 #[tauri::command]
 async fn windows_folder_options() -> Result<(), String> {
-    std::process::Command::new("rundll32.exe")
-        .args(["shell32.dll,Options_RunDLL", "0"])
-        .spawn()
-        .map(|_| ())
-        .map_err(err)
+    blocking(move || -> Result<(), String> {
+        std::process::Command::new("rundll32.exe")
+            .args(["shell32.dll,Options_RunDLL", "0"])
+            .spawn()
+            .map(|_| ())
+            .map_err(err)
+    })
+    .await?
 }
 
 /* ---------- Fonctions officielles de Windows ---------- */
 
 /// Exécute `f` sur le thread de la fenêtre (obligatoire pour les menus et boîtes de dialogue Windows).
+/// L'attente se fait sur un fil dédié (spawn_blocking) : un menu, un glisser ou une boîte de dialogue qui dure
+/// n'occupe jamais un fil de l'exécuteur asynchrone (sinon, quand tous sont pris, plus rien ne répond).
 #[cfg(windows)]
-fn on_main<R: Send + 'static>(
+async fn on_main<R: Send + 'static>(
     window: &WebviewWindow,
     f: impl FnOnce(windows::Win32::Foundation::HWND) -> R + Send + 'static,
 ) -> Result<R, String> {
@@ -625,44 +694,44 @@ fn on_main<R: Send + 'static>(
             let _ = tx.send(f(windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void)));
         })
         .map_err(err)?;
-    rx.recv().map_err(err)
+    blocking(move || rx.recv().map_err(err)).await?
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn shell_menu(window: WebviewWindow, paths: Vec<String>) -> Result<(), String> {
-    on_main(&window, move |hwnd| win::context_menu(hwnd, &paths))?.map_err(err)
+    on_main(&window, move |hwnd| win::context_menu(hwnd, &paths)).await?.map_err(err)
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn properties(window: WebviewWindow, paths: Vec<String>) -> Result<(), String> {
-    on_main(&window, move |_| win::properties(&paths))?.map_err(err)
+    on_main(&window, move |_| win::properties(&paths)).await?.map_err(err)
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn open_with(window: WebviewWindow, path: String) -> Result<(), String> {
-    on_main(&window, move |hwnd| win::open_with(hwnd, &path))?.map_err(err)
+    on_main(&window, move |hwnd| win::open_with(hwnd, &path)).await?.map_err(err)
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn clipboard_set(window: WebviewWindow, paths: Vec<String>, cut: bool) -> Result<(), String> {
-    on_main(&window, move |hwnd| win::clipboard_set(hwnd, &paths, cut))?.map_err(err)
+    on_main(&window, move |hwnd| win::clipboard_set(hwnd, &paths, cut)).await?.map_err(err)
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn clipboard_get(window: WebviewWindow) -> Result<Clip, String> {
-    let (paths, cut) = on_main(&window, win::clipboard_get)?.map_err(err)?;
+    let (paths, cut) = on_main(&window, win::clipboard_get).await?.map_err(err)?;
     Ok(Clip { paths, cut })
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn clipboard_clear(window: WebviewWindow) -> Result<(), String> {
-    on_main(&window, win::clipboard_clear)?.map_err(err)
+    on_main(&window, win::clipboard_clear).await?.map_err(err)
 }
 
 /* ---------- Fonctions créatives (voir extras.rs) ---------- */
@@ -832,7 +901,10 @@ async fn convert(path: String, preset: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn open_in_code(path: String) -> Result<(), String> {
-    extras::quiet("code.cmd").arg(&path).spawn().map(|_| ()).map_err(err)
+    blocking(move || -> Result<(), String> {
+        extras::quiet("code.cmd").arg(&path).spawn().map(|_| ()).map_err(err)
+    })
+    .await?
 }
 
 #[cfg(windows)]
@@ -872,7 +944,7 @@ struct Mods {
 #[cfg(windows)]
 #[tauri::command]
 async fn start_drag(window: WebviewWindow, paths: Vec<String>) -> Result<(), String> {
-    on_main(&window, move |hwnd| win::start_drag(hwnd, &paths))?.map_err(err)
+    on_main(&window, move |hwnd| win::start_drag(hwnd, &paths)).await?.map_err(err)
 }
 
 /// Fait passer une fenêtre Kane au premier plan (pendant un glisser-déposer notamment).
@@ -880,7 +952,7 @@ async fn start_drag(window: WebviewWindow, paths: Vec<String>) -> Result<(), Str
 #[tauri::command]
 async fn raise_window(app: tauri::AppHandle, label: String, activate: bool) -> Result<(), String> {
     let w = app.get_webview_window(&label).ok_or("Fenêtre introuvable")?;
-    on_main(&w, move |hwnd| win::raise(hwnd, activate))
+    on_main(&w, move |hwnd| win::raise(hwnd, activate)).await
 }
 
 #[cfg(windows)]
@@ -894,37 +966,41 @@ fn key_state() -> Mods {
 #[cfg(windows)]
 #[tauri::command]
 async fn has_preview_handler(ext: String) -> bool {
-    win::preview_handler_clsid(&ext).is_some()
+    blocking(move || -> bool {
+        win::preview_handler_clsid(&ext).is_some()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn native_preview_show(window: WebviewWindow, path: String, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
-    on_main(&window, move |hwnd| win::native_preview_show(hwnd, &path, x, y, w, h))?.map_err(err)
+    on_main(&window, move |hwnd| win::native_preview_show(hwnd, &path, x, y, w, h)).await?.map_err(err)
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn native_preview_move(window: WebviewWindow, x: i32, y: i32, w: i32, h: i32) -> Result<(), String> {
-    on_main(&window, move |_| win::native_preview_move(x, y, w, h))
+    on_main(&window, move |_| win::native_preview_move(x, y, w, h)).await
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn native_preview_visible(window: WebviewWindow, visible: bool) -> Result<(), String> {
-    on_main(&window, move |_| win::native_preview_visible(visible))
+    on_main(&window, move |_| win::native_preview_visible(visible)).await
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn native_preview_alive(window: WebviewWindow) -> Result<bool, String> {
-    on_main(&window, |_| win::native_preview_alive())
+    on_main(&window, |_| win::native_preview_alive()).await
 }
 
 #[cfg(windows)]
 #[tauri::command]
 async fn native_preview_close(window: WebviewWindow) -> Result<(), String> {
-    on_main(&window, |_| win::native_preview_close())
+    on_main(&window, |_| win::native_preview_close()).await
 }
 
 fn pct_decode(s: &str) -> String {
@@ -983,7 +1059,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             let path = launch_arg(&argv).unwrap_or_else(|| HOME_ARG.into());
             let app = app.clone();
-            tauri::async_runtime::spawn(async move {
+            std::thread::spawn(move || {
                 let _ = open_window(&app, &path);
             });
         }))
@@ -1030,6 +1106,24 @@ pub fn run() {
                     }
                 }
             }
+            // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane
+            #[cfg(windows)]
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_millis(120));
+                    let Some((which, hwnd)) = win::rescue_keys() else { continue };
+                    if which == 2 {
+                        restart_now(&handle);
+                    }
+                    for w in handle.webview_windows().values() {
+                        if w.hwnd().map(|h| h.0 as isize == hwnd).unwrap_or(false) {
+                            let _ = w.reload();
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1500)); // une seule fois par appui
+                });
+            }
             // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
             #[cfg(windows)]
             {
@@ -1063,6 +1157,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_dir,
+            restart_app,
             launch_path,
             check_update,
             install_update,

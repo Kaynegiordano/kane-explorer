@@ -465,6 +465,23 @@ pub fn modifiers() -> (bool, bool) {
     unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) < 0, GetAsyncKeyState(VK_SHIFT.0 as i32) < 0) }
 }
 
+/// Raccourci de secours pressé dans une fenêtre de Kane : 1 = Ctrl+Maj+F5 (recharger la fenêtre),
+/// 2 = Ctrl+Maj+F12 (redémarrer Kane), avec la fenêtre concernée. Lu au niveau du système : marche même si la page est figée.
+pub fn rescue_keys() -> Option<(u8, isize)> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_F12, VK_F5, VK_SHIFT};
+    unsafe {
+        let down = |k: u16| GetAsyncKeyState(k as i32) < 0;
+        if !down(VK_CONTROL.0) || !down(VK_SHIFT.0) {
+            return None;
+        }
+        let which = if down(VK_F5.0) { 1 } else if down(VK_F12.0) { 2 } else { return None };
+        let fg = GetForegroundWindow();
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(fg, Some(&mut pid));
+        (pid == std::process::id()).then_some((which, fg.0 as isize))
+    }
+}
+
 /* ---------------- Miniatures Windows ---------------- */
 
 /// Miniature (ou icône) d'un fichier via le moteur de Windows, encodée en PNG.

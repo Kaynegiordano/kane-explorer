@@ -1251,12 +1251,50 @@ function networkMenuItems() {
   ];
 }
 
+/* ---------------- Dépannage : reprendre la main ---------------- */
+
+/** Recharge cette fenêtre (onglets conservés) : remet l'interface à zéro si quelque chose est resté coincé. */
+function unstick() {
+  try { if (isMainWindow) saveTabs(); } catch { /* ignoré */ }
+  location.reload();
+}
+
+/** Relance complètement Kane (nouveau processus) : utile si le moteur lui-même ne répond plus. */
+function restartKane() {
+  try { if (isMainWindow) saveTabs(); } catch { /* ignoré */ }
+  invoke('restart_app').catch(() => toast('Utilisez Ctrl+Maj+F12 pour redémarrer Kane', 'error'));
+}
+
+// Un dossier qui met plus de 6 s à s'ouvrir (lecteur réseau, disque qui se réveille, OneDrive…) : proposer de reprendre la main
+let stuckToast = null;
+setInterval(() => {
+  const slow = [...pendingCalls.values()].find((c) => Date.now() - c.at > 6000);
+  if (!slow) { stuckToast?.remove(); stuckToast = null; return; }
+  if (stuckToast?.isConnected) return;
+  stuckToast = document.createElement('div');
+  stuckToast.className = 'toast update';
+  stuckToast.innerHTML = `<b>Kane attend une réponse de Windows</b><small>${esc(slow.path ? basename(slow.path) || slow.path : slow.cmd)} met du temps à répondre (lecteur lent, réseau, OneDrive…).</small>` +
+    '<div class="row-btns"><button class="btn primary" data-s="unstick">Débloquer</button><button class="btn" data-s="restart">Redémarrer Kane</button><button class="btn" data-s="wait">Attendre</button></div>';
+  stuckToast.onclick = (ev) => {
+    const b = ev.target.closest('[data-s]');
+    if (!b) return;
+    if (b.dataset.s === 'unstick') unstick();
+    else if (b.dataset.s === 'restart') restartKane();
+    else { stuckToast.remove(); for (const c of pendingCalls.values()) c.at = Infinity; } // ne plus avertir pour ces appels
+  };
+  els.toasts.append(stuckToast);
+}, 2000);
+
 /* L'astuce : un clic sur « Kane Explorer » (logo, en haut de la barre latérale) ouvre un menu caché :
    le choix de la carte réseau, sans quitter le dossier ouvert, et quelques outils peu conventionnels. */
 document.querySelector('.sidebar .brand').addEventListener('click', () => {
   const r = document.querySelector('.sidebar .brand').getBoundingClientRect();
   loadNetwork(); // état à jour pour la prochaine ouverture
   showMenu(r.left + 10, r.bottom + 2, [
+    { label: '<b>Dépannage</b>', disabled: true },
+    { label: 'Débloquer l’affichage', kbd: 'Ctrl+Maj+F5', run: unstick },
+    { label: 'Redémarrer Kane', kbd: 'Ctrl+Maj+F12', run: restartKane },
+    '-',
     { label: '<b>Carte réseau</b>', disabled: true },
     ...networkMenuItems(),
     '-',

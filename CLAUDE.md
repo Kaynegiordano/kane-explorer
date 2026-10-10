@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.3.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.3.2** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -225,6 +225,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.9 | Tri mémorisé dossier par dossier (plus de tri global) ; bouton réseau du bas retiré (choix de la carte dans le menu du logo) |
 | 1.3.0 | Grand aperçu au survol des images et vidéos (option, `peek.js`) |
 | 1.3.1 | Ctrl + molette = taille des éléments (7 niveaux, liste → aperçus géants) ; Alt + molette = changer d'onglet |
+| 1.3.2 | Fin des blocages (« affichage figé », Windows + E sans fenêtre) : opérations lourdes hors des fils de l'exécuteur ; secours Ctrl+Maj+F5 / F12, section « Dépannage » du menu du logo, alerte quand un dossier traîne |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -272,6 +273,17 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **Ne jamais bloquer un fil de l'exécuteur asynchrone** (1.3.2) : Tauri n'a que N fils (= nombre de cœurs, 8 chez l'utilisateur). Une
+  commande `async fn` qui fait du travail bloquant (fichiers, ShellExecute, attente du fil principal…) en occupe un ; quand tous sont pris,
+  plus aucune commande ne répond (« affichage figé ») et Windows + E n'ouvrait plus de fenêtre (constaté sur le Kane installé : 2 lancements,
+  0 fenêtre). Règles : corps bloquants dans `blocking(...)` (spawn_blocking) ; `on_main` est `async` et attend le fil principal via
+  `blocking` ; les fenêtres sont créées depuis un `std::thread` (`open_window`) ; `watch_dir` est hors du fil principal et n'émet
+  `dir-changed` qu'une fois par 400 ms. Une commande non-`async` s'exécute sur le fil principal : à éviter sauf trivialité.
+- **Secours** : Ctrl+Maj+F5 (recharger la fenêtre) et Ctrl+Maj+F12 (redémarrer Kane, `restart_now` : PowerShell relance l'exe 0,9 s plus
+  tard puis `exit(0)`) sont lus par un fil Rust (`win::rescue_keys`, `GetAsyncKeyState` + fenêtre au premier plan de ce processus) : ils
+  marchent même si la page est figée. Mêmes actions dans le menu du logo (« Dépannage »). `invoke` (main.js) suit `list_dir` & co
+  (`pendingCalls`) : au-delà de 6 s, une alerte propose Débloquer / Redémarrer / Attendre.
 
 - **PowerShell 5.1** : un script contenant des accents doit être en **UTF-8 avec BOM**, sinon « LÃ©ger ».
   `R` est un alias (`Invoke-History`) : ne pas nommer une fonction `R`. Pas de `&&`.
