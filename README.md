@@ -57,6 +57,8 @@ génère `latest.json` et crée la Release GitHub. **Sauvegardez cette clé** : 
 - Annuler (Ctrl+Z) : suppression, collage, déplacement, renommage, création, rangement, ZIP
 - Parcourir les archives (zip, 7z, rar, tar, iso) comme des dossiers ; Ranger ; ZIP / Extraire
 - Apparence : thème, couleur d'accent, densité des lignes, animations
+- Ctrl + molette : taille et vue mémorisées uniquement pour le dossier affiché (également entre onglets et après redémarrage)
+- Alt + molette : lieu précédent (vers le haut) / suivant (vers le bas) dans l'historique de l'onglet actif
 
 ## Développement
 

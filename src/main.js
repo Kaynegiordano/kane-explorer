@@ -349,8 +349,21 @@ function parentOf(p) {
   return /^[A-Za-z]:$/.test(par) ? par + '\\' : par;
 }
 
-function goBack() { if (tab.hIndex > 0) { tab.hIndex--; navigate(tab.history[tab.hIndex], { push: false }); } }
-function goForward() { if (tab.hIndex < tab.history.length - 1) { tab.hIndex++; navigate(tab.history[tab.hIndex], { push: false }); } }
+async function goHistory(dir) {
+  const t = tab;
+  const previous = t.hIndex, next = previous + dir;
+  if (t.historyBusy || next < 0 || next >= t.history.length) return;
+  t.historyBusy = true;
+  t.hIndex = next;
+  const loadId = t.loadId + 1;
+  try {
+    const ok = await navigate(t.history[next], { push: false, t });
+    // Ne pas perdre l'historique si le dossier a été supprimé ou le lecteur débranché.
+    if (!ok && t.hIndex === next && t.loadId === loadId) { t.hIndex = previous; if (t === tab) renderChrome(); }
+  } finally { t.historyBusy = false; }
+}
+function goBack() { return goHistory(-1); }
+function goForward() { return goHistory(1); }
 function goUp() {
   const par = parentOf(tab.path);
   if (par !== null) navigate(par, { select: tab.path });
@@ -549,16 +562,55 @@ function computeItems() {
   return list;
 }
 
+// Les réglages globaux restent les valeurs par défaut des dossiers sans réglage propre.
+const folderViewKey = (path) => path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+function folderViews() {
+  const saved = store.get('viewByFolder', {});
+  return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+}
+function syncFolderView() {
+  const local = folderViews()[folderViewKey(tab.path)];
+  const v = local?.view ?? store.get('view', 'list');
+  const d = local?.density ?? store.get('density', 'comfortable');
+  const size = local?.iconSize ?? store.get('iconSize', 64);
+  prefs.view = v === 'grid' ? 'grid' : 'list';
+  prefs.density = d === 'compact' ? 'compact' : 'comfortable';
+  prefs.iconSize = [64, 96, 128, 192, 256].includes(size) ? size : 64;
+  applyLook();
+}
+function saveFolderView() {
+  if (tab.path === HOME) return;
+  const saved = folderViews(), key = folderViewKey(tab.path);
+  delete saved[key]; // le dernier dossier réglé passe à la fin
+  saved[key] = { view: prefs.view, density: prefs.density, iconSize: prefs.iconSize };
+  const keys = Object.keys(saved);
+  if (keys.length > 800) delete saved[keys[0]];
+  store.set('viewByFolder', saved);
+}
+
 function render() {
+  syncFolderView();
   if (tab.path === HOME) { tab.items = []; renderHome(); }
   else { tab.items = computeItems(); renderFiles(); ensureSortMeta(); }
   renderChrome();
   schedulePreview();
 }
 
+window.addEventListener('storage', (ev) => {
+  if (ev.key !== 'kane.viewByFolder' || !tab) return;
+  try {
+    const key = folderViewKey(tab.path);
+    if (JSON.stringify(JSON.parse(ev.oldValue || '{}')?.[key]) === JSON.stringify(JSON.parse(ev.newValue || '{}')?.[key])) return;
+  } catch { /* réglage illisible : revenir aux valeurs par défaut */ }
+  const top = els.content.scrollTop;
+  render();
+  els.content.scrollTop = top;
+  renderWindow(true);
+});
+
 const view = { cols: 1, stride: ROW_H, first: -1, last: -1 };
 
-function renderFiles() {
+function renderFiles(animate = true, deferWindow = false) {
   view.first = view.last = -1;
   if (!tab.loaded) { els.content.innerHTML = ''; return; }
   if (!tab.items.length) {
@@ -579,11 +631,13 @@ function renderFiles() {
       `</div><div class="vbody list" id="vbody"><div class="vwin" id="vwin"></div></div>`;
   }
   layoutWindow();
-  renderWindow(true); // sans cela, la liste reste vide jusqu'au prochain défilement (tri, type d'affichage...)
+  if (!deferWindow) renderWindow(true); // sinon, le zoom rend après avoir restauré le défilement
   // Petite animation d'entrée, seulement à l'affichage d'un dossier (pas au défilement)
   const vw = $('vwin');
-  vw.classList.add('enter');
-  setTimeout(() => vw.classList.remove('enter'), 450);
+  if (animate && prefs.animations) {
+    vw.classList.add('enter');
+    setTimeout(() => vw.classList.remove('enter'), 450);
+  }
 }
 
 /** Calcule colonnes et hauteur totale de la zone virtualisée. */
@@ -660,17 +714,24 @@ els.content.addEventListener('scroll', () => {
   if (!scrollRaf) scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; renderWindow(false); });
 }, { passive: true });
 
+let resizeRaf = 0;
 new ResizeObserver(() => {
-  if (!tab || tab.path === HOME || !$('vbody')) return;
-  // Moins (ou plus) de colonnes qui tiennent : l'en-tête doit être reconstruit
-  if (prefs.view === 'list' && visibleColumns(els.content.clientWidth - 48).join() !== listCols.join()) {
-    const top = els.content.scrollTop;
-    render();
-    els.content.scrollTop = top;
-    return;
-  }
-  layoutWindow();
-  renderWindow(true);
+  if (resizeRaf) return;
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0;
+    if (!tab || tab.path === HOME || !$('vbody')) return;
+    // Moins (ou plus) de colonnes qui tiennent : l'en-tête doit être reconstruit
+    if (prefs.view === 'list' && visibleColumns(els.content.clientWidth - 48).join() !== listCols.join()) {
+      const top = els.content.scrollTop;
+      render();
+      els.content.scrollTop = top;
+      return;
+    }
+    const previousCols = view.cols;
+    layoutWindow();
+    // Les tuiles s'adaptent en CSS : garder les images tant que les colonnes ne changent pas.
+    renderWindow(previousCols !== view.cols);
+  });
 }).observe(els.content);
 
 // Miniature / icône indisponible -> icône Kane classique
@@ -1031,13 +1092,14 @@ function togglePreview() {
   schedulePreview();
 }
 function setView(v) {
-  savePref('view', v);
+  prefs.view = v;
+  saveFolderView();
   render();
   if (tab.focus >= 0) scrollToItem(tab.focus);
   renderWindow(true);
 }
 
-/* ----- Ctrl + molette : taille des éléments ; Alt + molette : changer d'onglet ----- */
+/* ----- Ctrl + molette : zoom du dossier ; Alt + molette : précédent / suivant ----- */
 
 // Du plus petit au plus grand : liste compacte, liste, puis grille (taille des icônes en px)
 const ZOOM_LEVELS = [
@@ -1068,30 +1130,48 @@ function showZoomHint(text) {
 }
 
 function setZoomLevel(i) {
-  const l = ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i))];
-  if (l.view === 'list') savePref('density', l.density); else savePref('iconSize', l.icon);
-  savePref('view', l.view);
+  if (!tab || tab.path === HOME) return;
+  i = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i));
+  if (i === zoomLevelIndex()) { showZoomHint(ZOOM_LEVELS[i].name); return; }
+  const l = ZOOM_LEVELS[i], previousView = prefs.view;
+  const body = $('vbody');
+  const top = Math.max(0, els.content.scrollTop - (body?.offsetTop || 0));
+  const anchor = Math.floor(top / view.stride) * view.cols;
+  const fraction = (top % view.stride) / view.stride;
+  if (l.view === 'list') prefs.density = l.density; else prefs.iconSize = l.icon;
+  prefs.view = l.view;
+  saveFolderView();
   applyLook();
-  previewKey = '';
-  render();
+  // Le zoom ne change ni le tri, ni les données, ni l'aperçu : un seul rendu des éléments.
+  if (previousView !== prefs.view) renderFiles(false, true); else layoutWindow();
+  const newBody = $('vbody');
+  if (newBody) els.content.scrollTop = newBody.offsetTop + (Math.floor(anchor / view.cols) + fraction) * view.stride;
   if (tab.focus >= 0) scrollToItem(tab.focus);
   renderWindow(true);
+  renderChrome();
   showZoomHint(l.name);
 }
 
-let wheelAcc = 0, wheelAt = 0;
+let wheelAcc = 0, wheelAt = 0, wheelMode = '', historyWheelAt = -Infinity;
 document.addEventListener('wheel', (ev) => {
   if (!viewerEl.hidden || !modal.hidden || (!ev.ctrlKey && !ev.altKey)) return;
   if (ev.target.closest('#modal, .menu, #preview, .palette')) return;
   ev.preventDefault();
   const now = performance.now();
-  if (now - wheelAt > 350) wheelAcc = 0;
+  const mode = ev.altKey && !ev.ctrlKey ? 'history' : 'zoom';
+  if (now - wheelAt > 350 || wheelMode !== mode) wheelAcc = 0;
+  wheelMode = mode;
   wheelAt = now;
-  wheelAcc += ev.deltaY * (ev.deltaMode === 1 ? 33 : 1);
+  wheelAcc += ev.deltaY * (ev.deltaMode === 1 ? 33 : ev.deltaMode === 2 ? els.content.clientHeight : 1);
   if (Math.abs(wheelAcc) < 60) return; // une encoche de molette = un cran
   const dir = wheelAcc < 0 ? 1 : -1;
   wheelAcc = 0;
-  if (ev.altKey && !ev.ctrlKey) { if (tabs.length > 1) cycleTab(-dir); return; } // Alt + molette : onglet suivant / précédent
+  if (mode === 'history') {
+    if (now - historyWheelAt < 180) return; // limiter les rafales des pavés tactiles
+    historyWheelAt = now;
+    if (dir > 0) goBack(); else goForward();
+    return;
+  }
   if (tab.path === HOME) return;
   setZoomLevel(zoomLevelIndex() + dir);              // Ctrl + molette : plus grand / plus petit
 }, { passive: false });
