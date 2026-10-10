@@ -52,9 +52,9 @@
 .tile { position: relative; }
 .lasso { position: fixed; z-index: 50; pointer-events: none; border: 1px solid var(--accent); border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.tile video.thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; background: #000; }
+.tile video.thumb { width: var(--tile-icon, 64px); height: var(--tile-icon, 64px); object-fit: cover; border-radius: 6px; background: #000; }
 .tile[style*="--scrub"]::after {
-  content: ""; position: absolute; left: 10px; right: 10px; top: 76px; height: 3px; border-radius: 2px;
+  content: ""; position: absolute; left: 10px; right: 10px; top: calc(var(--tile-icon, 64px) + 12px); height: 3px; border-radius: 2px;
   background: linear-gradient(to right, var(--accent) var(--scrub), var(--border) var(--scrub));
 }
 
@@ -339,3 +339,8 @@ body.single-folders .card, body.single-click .card { cursor: pointer; }
 #peek .peek-cap { display: flex; gap: 10px; align-items: baseline; padding: 6px 4px 2px; font-size: 12px; color: var(--muted); }
 #peek .peek-cap b { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
 body.no-anim #peek { transition: none; }
+
+/* Indication de taille (Ctrl + molette) */
+#zoom-hint { position: fixed; left: 50%; bottom: 64px; transform: translate(-50%, 8px); z-index: 30; padding: 8px 16px; border-radius: 999px; background: rgba(20, 22, 28, .86); color: #fff; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s ease, transform .15s ease; backdrop-filter: blur(6px); }
+#zoom-hint.on { opacity: 1; transform: translate(-50%, 0); }
+body.no-anim #zoom-hint { transition: none; }

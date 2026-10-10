@@ -6,8 +6,9 @@ const HOME = '::home';
 
 // Dimensions de l'affichage virtualisé (doivent correspondre au CSS)
 let ROW_H = 34; // 28 en densité compacte (voir applyLook)
-const TILE_W = 112;
-const TILE_H = 128;
+let TILE_W = 112;   // tuiles : suivent la taille d'icône (voir applyIconSize)
+let TILE_H = 128;
+let TILE_ICON = 64;
 const GAP = 6;
 const OVERSCAN = 6;
 
@@ -47,6 +48,7 @@ const prefs = {
   animations: store.get('animations', true),
   viewerOnOpen: store.get('viewerOnOpen', true),
   updateMode: store.get('updateMode', 'notify'),      // notify | auto | manual
+  iconSize: store.get('iconSize', 64),               // taille des icônes en affichage grille (Ctrl + molette)
   peek: store.get('peek', true),                      // grand aperçu au survol des images / vidéos
   openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
   theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
@@ -85,6 +87,15 @@ function applyLook() {
   }
   ROW_H = prefs.density === 'compact' ? 28 : 34;
   root.style.setProperty('--row-h', ROW_H + 'px');
+  applyIconSize();
+}
+
+function applyIconSize() {
+  TILE_ICON = prefs.iconSize;
+  TILE_W = TILE_ICON + 48;
+  TILE_H = TILE_ICON + 64;
+  document.documentElement.style.setProperty('--tile-icon', TILE_ICON + 'px');
+  document.documentElement.style.setProperty('--tile-h', TILE_H + 'px');
 }
 applyLook();
 setInterval(() => { if (prefs.theme === 'schedule') applyLook(); }, 30000); // bascule clair / sombre à l'heure dite
@@ -590,9 +601,9 @@ function itemHtml(e, i) {
   if (e.is_dir) c += ' dir';
   if (prefs.view === 'grid') {
     const visual = weVisual(e) || (isApp(e)
-      ? `<img class="thumb icon" src="${thumbUrl(e, 64, 'i')}" decoding="async" draggable="false" alt="">`
+      ? `<img class="thumb icon" src="${thumbUrl(e, Math.max(64, TILE_ICON), 'i')}" decoding="async" draggable="false" alt="">`
       : wantsThumb(e)
-        ? `<img class="thumb" src="${thumbUrl(e, 128)}" decoding="async" draggable="false" alt="">`
+        ? `<img class="thumb" src="${thumbUrl(e, Math.max(128, TILE_ICON * 2))}" decoding="async" draggable="false" alt="">`
         : fileIcon(e));
     return `<div class="${c} tile" data-i="${i}" title="${esc(e.name)}">${visual}<div class="label">${tagDot(e)}${esc(itemLabel(e))}</div>${ratingBadge(e)}</div>`;
   }
@@ -1014,6 +1025,65 @@ function setView(v) {
   if (tab.focus >= 0) scrollToItem(tab.focus);
   renderWindow(true);
 }
+
+/* ----- Ctrl + molette : taille des éléments ; Alt + molette : changer d'onglet ----- */
+
+// Du plus petit au plus grand : liste compacte, liste, puis grille (taille des icônes en px)
+const ZOOM_LEVELS = [
+  { name: 'Liste compacte', view: 'list', density: 'compact' },
+  { name: 'Liste', view: 'list', density: 'comfortable' },
+  { name: 'Icônes moyennes', view: 'grid', icon: 64 },
+  { name: 'Grandes icônes', view: 'grid', icon: 96 },
+  { name: 'Très grandes icônes', view: 'grid', icon: 128 },
+  { name: 'Immenses icônes', view: 'grid', icon: 192 },
+  { name: 'Aperçus géants', view: 'grid', icon: 256 },
+];
+
+function zoomLevelIndex() {
+  if (prefs.view === 'list') return prefs.density === 'compact' ? 0 : 1;
+  let best = 2;
+  ZOOM_LEVELS.forEach((l, i) => { if (l.icon && Math.abs(l.icon - prefs.iconSize) < Math.abs(ZOOM_LEVELS[best].icon - prefs.iconSize)) best = i; });
+  return best;
+}
+
+let zoomHintTimer = 0;
+function showZoomHint(text) {
+  let h = $('zoom-hint');
+  if (!h) { h = document.createElement('div'); h.id = 'zoom-hint'; document.body.append(h); }
+  h.textContent = text;
+  h.classList.add('on');
+  clearTimeout(zoomHintTimer);
+  zoomHintTimer = setTimeout(() => h.classList.remove('on'), 1100);
+}
+
+function setZoomLevel(i) {
+  const l = ZOOM_LEVELS[Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i))];
+  if (l.view === 'list') savePref('density', l.density); else savePref('iconSize', l.icon);
+  savePref('view', l.view);
+  applyLook();
+  previewKey = '';
+  render();
+  if (tab.focus >= 0) scrollToItem(tab.focus);
+  renderWindow(true);
+  showZoomHint(l.name);
+}
+
+let wheelAcc = 0, wheelAt = 0;
+document.addEventListener('wheel', (ev) => {
+  if (!viewerEl.hidden || !modal.hidden || (!ev.ctrlKey && !ev.altKey)) return;
+  if (ev.target.closest('#modal, .menu, #preview, .palette')) return;
+  ev.preventDefault();
+  const now = performance.now();
+  if (now - wheelAt > 350) wheelAcc = 0;
+  wheelAt = now;
+  wheelAcc += ev.deltaY * (ev.deltaMode === 1 ? 33 : 1);
+  if (Math.abs(wheelAcc) < 60) return; // une encoche de molette = un cran
+  const dir = wheelAcc < 0 ? 1 : -1;
+  wheelAcc = 0;
+  if (ev.altKey && !ev.ctrlKey) { if (tabs.length > 1) cycleTab(-dir); return; } // Alt + molette : onglet suivant / précédent
+  if (tab.path === HOME) return;
+  setZoomLevel(zoomLevelIndex() + dir);              // Ctrl + molette : plus grand / plus petit
+}, { passive: false });
 
 /* ----- Fonctions officielles de Windows ----- */
 

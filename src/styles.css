@@ -199,12 +199,12 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .row .ficon { width: 22px; height: 22px; }
 
 /* Vue grille */
-.tile { height: 128px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px 8px; border-radius: 8px; text-align: center; min-width: 0; }
-.tile .ficon, .tile .thumb { width: 64px; height: 64px; flex: none; }
+.tile { height: var(--tile-h, 128px); display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px 8px; border-radius: 8px; text-align: center; min-width: 0; }
+.tile .ficon, .tile .thumb { width: var(--tile-icon, 64px); height: var(--tile-icon, 64px); flex: none; }
 .tile .thumb { object-fit: cover; border-radius: 6px; background: var(--bg); box-shadow: 0 0 0 1px var(--border); }
 .tile .label { width: 100%; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; font-size: 12.5px; }
 
-.tile .thumb.icon { object-fit: contain; background: none; box-shadow: none; border-radius: 0; width: 56px; height: 56px; margin: 4px; }
+.tile .thumb.icon { object-fit: contain; background: none; box-shadow: none; border-radius: 0; width: calc(var(--tile-icon, 64px) * .875); height: calc(var(--tile-icon, 64px) * .875); margin: 4px; }
 .row img.ficon { width: 22px; height: 22px; object-fit: contain; }
 
 /* Cibles de glisser-déposer */

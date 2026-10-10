@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.3.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.3.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -109,6 +109,10 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   dossier (clé = chemin en minuscules ; nom croissant = pas d'entrée ; 800 dossiers max). Les anciens `kane.sortKey/sortDir` globaux sont supprimés.
 - **Menu « Trier par »** (`sortMenu`, main.js) : sous-menu du clic droit dans le vide (un second `showMenu` à `menuPos`), toutes les
   colonnes de `COLS`, croissant/décroissant, dossiers en premier.
+- **Ctrl + molette / Alt + molette** (`ZOOM_LEVELS`, `setZoomLevel`, écouteur `wheel` sur `document`, main.js) : Ctrl + molette parcourt 7 niveaux
+  (liste compacte, liste, puis grille à 64 / 96 / 128 / 192 / 256 px) en changeant `prefs.view`, `density` ou `iconSize` ; les tuiles suivent
+  `TILE_W/TILE_H/TILE_ICON` (`applyIconSize`, variables CSS `--tile-icon` / `--tile-h`), vignettes redemandées plus grandes. Indication `#zoom-hint`.
+  Alt + molette = onglet précédent / suivant (`cycleTab`). Désactivé dans la visionneuse (qui a son propre zoom), les boîtes de dialogue et l'accueil.
 - **Grand aperçu au survol** (`src/peek.js`, `#peek` dans creative.css, option `prefs.peek`) : souris immobile 550 ms sur une image ou une vidéo
   (liste ou grille ; pas les fichiers OneDrive en ligne ni les archives) → vignette flottante près du curseur (image : `assetOrThumb(e, 720)` ;
   vidéo : `<video muted autoplay loop>`, libérée au masquage pour ne pas verrouiller le fichier) avec nom, dimensions et taille. Masquée au
@@ -220,6 +224,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.8 | Notification de mise à jour (Mettre à jour / Nouveautés / Plus tard), mode automatique, message après installation ; thème automatique selon l'heure ; sauvegarde et restauration des réglages |
 | 1.2.9 | Tri mémorisé dossier par dossier (plus de tri global) ; bouton réseau du bas retiré (choix de la carte dans le menu du logo) |
 | 1.3.0 | Grand aperçu au survol des images et vidéos (option, `peek.js`) |
+| 1.3.1 | Ctrl + molette = taille des éléments (7 niveaux, liste → aperçus géants) ; Alt + molette = changer d'onglet |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
