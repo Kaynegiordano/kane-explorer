@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.3.3** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.3.4** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -115,6 +115,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   Vue, densité et taille sont désormais mémorisées **par dossier** dans `kane.viewByFolder` (`syncFolderView`, `saveFolderView`, chemins normalisés, 800 dossiers maximum), synchronisées entre fenêtres et incluses dans les sauvegardes de réglages. Les anciens réglages globaux servent de valeurs par défaut. Les boutons liste / grille règlent aussi le dossier courant.
   Alt + molette = lieu précédent (haut) / suivant (bas) dans l'historique de l'onglet actif (`goHistory`), y compris depuis l'accueil. Le zoom est désactivé à l'accueil. Les deux raccourcis sont désactivés dans la visionneuse, les boîtes de dialogue, le volet d'aperçu et la palette.
   Le zoom conserve un repère de défilement et ne retrie pas les fichiers ; le redimensionnement conserve les éléments DOM si le nombre de colonnes ne change pas. `goHistory` sérialise les navigations et restaure l'index si la destination est inaccessible.
+- **Fermeture de la visionneuse par le fond** (1.3.4, viewerBackdropPress, features.js) : cible du pointerdown mémorisée avant la capture par le déplacement ; clic simple sur .vw-stage, .vw-main ou .vw-help ferme en vue simple. Un mouvement de plus de 5 px, une annulation ou un clic initial sur le média ne ferme pas. Panneau Infos, boutons et comparaison conservés.
 - **Grand aperçu au survol** (`src/peek.js`, `#peek` dans creative.css, option `prefs.peek`) : souris immobile 550 ms sur une image ou une vidéo
   (liste ou grille ; pas les fichiers OneDrive en ligne ni les archives) → vignette flottante près du curseur (image : `assetOrThumb(e, 720)` ;
   vidéo : `<video muted autoplay loop>`, libérée au masquage pour ne pas verrouiller le fichier) avec nom, dimensions et taille. Masquée au
@@ -229,6 +230,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.3.1 | Ctrl + molette = taille des éléments (7 niveaux, liste → aperçus géants) ; Alt + molette = changer d'onglet |
 | 1.3.2 | Fin des blocages (« affichage figé », Windows + E sans fenêtre) : opérations lourdes hors des fils de l'exécuteur ; secours Ctrl+Maj+F5 / F12, section « Dépannage » du menu du logo, alerte quand un dossier traîne |
 | 1.3.3 | Zoom et vue mémorisés par dossier ; Alt + molette = historique précédent / suivant ; interface affinée, barre latérale adaptée aux fenêtres étroites, rendu du zoom et du redimensionnement optimisé |
+| 1.3.4 | Visionneuse : clic sur le fond pour fermer ; clics sur le média, zoom, glissers et contrôles conservés |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

@@ -548,6 +548,21 @@ viewerEl.className = 'viewer';
 viewerEl.hidden = true;
 document.body.append(viewerEl);
 
+// Conserver la cible avant la capture du pointeur par le déplacement de l'image.
+// Un glisser, ou un clic sur l'image, ne doit jamais être pris pour un clic sur le fond.
+let viewerBackdropPress = null;
+const isViewerBackdrop = (target) => target === viewerEl || target.matches('.vw-stage, .vw-main, .vw-help');
+viewerEl.addEventListener('pointerdown', (ev) => {
+  viewerBackdropPress = ev.button === 0 && vw?.mode === 'single'
+    ? { id: ev.pointerId, x: ev.clientX, y: ev.clientY, background: isViewerBackdrop(ev.target), moved: false }
+    : null;
+}, true);
+viewerEl.addEventListener('pointermove', (ev) => {
+  const press = viewerBackdropPress;
+  if (press?.id === ev.pointerId && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 5) press.moved = true;
+}, true);
+viewerEl.addEventListener('pointercancel', () => { viewerBackdropPress = null; }, true);
+
 function openViewerFromSelection() {
   const sel = selectedEntries();
   const list = sel.length > 1 ? sel.filter(isViewable) : tab.items.filter(isViewable);
@@ -556,6 +571,7 @@ function openViewerFromSelection() {
 }
 
 function showViewerShell(mode) {
+  viewerBackdropPress = null;
   hideMenu();
   if (nativeOpen) invoke('native_preview_visible', { visible: false }).catch(() => {});
   viewerEl.hidden = false;
@@ -567,6 +583,7 @@ function closeViewer() {
   const last = vw?.mode === 'single' ? vw.list[vw.i] : null;
   viewerEl.hidden = true;
   viewerEl.innerHTML = '';
+  viewerBackdropPress = null;
   vw = null;
   if (nativeOpen) invoke('native_preview_visible', { visible: true }).catch(() => {});
   if (last) selectPath(last.path);
@@ -590,7 +607,7 @@ function openViewer(list, i) {
     </div>
     <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside>
       <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Niveau de zoom"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zreal" title="Taille réelle / ajuster (Z ou double-clic)">1:1</button><button data-v="zfit" title="Ajuster à la fenêtre (F)">Ajuster</button></div></div>
-    <div class="vw-help">Molette : zoom · glisser : déplacer · double-clic : 1:1 · ← → : image suivante (ou Maj + molette) · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · Suppr Corbeille · I infos · Échap fermer</div>`;
+    <div class="vw-help">Molette : zoom · glisser : déplacer · double-clic : 1:1 · ← → : image suivante (ou Maj + molette) · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · Suppr Corbeille · I infos · clic sur le fond ou Échap : fermer</div>`;
   const stage = viewerEl.querySelector('.vw-stage');
   stage.addEventListener('pointerdown', zoomPanStart);
   // (pendant un déplacement, la capture du pointeur fait de la scène la cible : on ne teste pas l'image)
@@ -863,6 +880,12 @@ function openCompare(list) {
 }
 
 viewerEl.addEventListener('click', async (ev) => {
+  const press = viewerBackdropPress;
+  viewerBackdropPress = null;
+  if (vw?.mode === 'single' && ev.detail > 0 && press?.background && !press.moved && isViewerBackdrop(ev.target)) {
+    closeViewer();
+    return;
+  }
   const b = ev.target.closest('[data-v]');
   if (!b || !vw) return;
   const k = +b.dataset.k;
