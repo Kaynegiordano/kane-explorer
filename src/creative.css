@@ -331,3 +331,11 @@ body.single-folders .card, body.single-click .card { cursor: pointer; }
 .toast.update .btn { border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
 .toast.update .btn:hover { background: var(--hover); }
 .toast.update .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Grand aperçu au survol (peek.js) */
+#peek { position: fixed; z-index: 25; padding: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .3); pointer-events: none; opacity: 0; transform: scale(.97); transition: opacity .14s ease, transform .14s ease; max-width: min(620px, 55vw); }
+#peek.on { opacity: 1; transform: none; }
+#peek img, #peek video { display: block; max-width: min(600px, 52vw); max-height: min(460px, 60vh); border-radius: 6px; background: var(--bg); }
+#peek .peek-cap { display: flex; gap: 10px; align-items: baseline; padding: 6px 4px 2px; font-size: 12px; color: var(--muted); }
+#peek .peek-cap b { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+body.no-anim #peek { transition: none; }

@@ -47,6 +47,7 @@ const prefs = {
   animations: store.get('animations', true),
   viewerOnOpen: store.get('viewerOnOpen', true),
   updateMode: store.get('updateMode', 'notify'),      // notify | auto | manual
+  peek: store.get('peek', true),                      // grand aperçu au survol des images / vidéos
   openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
   theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
   dayFrom: store.get('dayFrom', '07:00'),            // thème « selon l'heure » : clair à partir de…
@@ -56,7 +57,7 @@ const prefs = {
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'folders', updateMode: 'notify', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
 };
 
 /** Apparence : thème, couleur d'accent, densité des lignes. */
@@ -1920,6 +1921,7 @@ function openOptions() {
       ${check('showProtected', 'Afficher les fichiers protégés du système d\u2019exploitation')}
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
+      ${check('peek', 'Grand aperçu quand la souris reste sur une image ou une vidéo')}
       ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}

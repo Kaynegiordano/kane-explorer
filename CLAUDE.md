@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.2.9** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.3.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -69,7 +69,7 @@ Installateur NSIS ~2 Mo, en français.
 (pour que features.js soit chargé). Pour modifier main.js en masse, utiliser de petits scripts Node
 (remplacements exacts) : c'est ce qui a été fait (voir §9).
 
-Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js` → `backup.js`. `features.js` appelle `toolItemMenu` /
+Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js` → `backup.js` → `peek.js`. `features.js` appelle `toolItemMenu` /
 `toolBlankMenu` (tools.js) et `togglePins` / `pinMany` / `unpinFolder` (pins.js) ; `main.js` appelle `quickPlaces`,
 `quickItemHtml`, `homePinnedHtml`, `pinDropped`, `shelfDropped`, `PIN_ZONE`, `SHELF_ZONE`, `openQuickEditor`.
 
@@ -109,6 +109,11 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   dossier (clé = chemin en minuscules ; nom croissant = pas d'entrée ; 800 dossiers max). Les anciens `kane.sortKey/sortDir` globaux sont supprimés.
 - **Menu « Trier par »** (`sortMenu`, main.js) : sous-menu du clic droit dans le vide (un second `showMenu` à `menuPos`), toutes les
   colonnes de `COLS`, croissant/décroissant, dossiers en premier.
+- **Grand aperçu au survol** (`src/peek.js`, `#peek` dans creative.css, option `prefs.peek`) : souris immobile 550 ms sur une image ou une vidéo
+  (liste ou grille ; pas les fichiers OneDrive en ligne ni les archives) → vignette flottante près du curseur (image : `assetOrThumb(e, 720)` ;
+  vidéo : `<video muted autoplay loop>`, libérée au masquage pour ne pas verrouiller le fichier) avec nom, dimensions et taille. Masquée au
+  clic, défilement, molette, clavier, menu contextuel, perte de focus. `pointer-events: none` (n'intercepte rien).
+  Test : `Input.dispatchMouseEvent` de type `mouseMoved` doit avoir `button: 'none'` (sinon Chromium croit à un glisser, `ev.buttons = 1`).
 - **Animations** : `creative.css` (fin du fichier), désactivables (Options → Animations = classe `body.no-anim`) et
   coupées si Windows demande de réduire les animations. Ne pas animer ce qui est reconstruit à chaque rendu (onglets,
   aperçu : clignotement).
@@ -214,6 +219,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.2.7 | Onglets déplaçables au glisser (et détachables en fenêtre) ; dossiers et lecteurs s'ouvrent en un clic (nouveau mode par défaut) ; fenêtre par défaut 1200×1190 ; menu caché sur le logo (carte réseau, outils) |
 | 1.2.8 | Notification de mise à jour (Mettre à jour / Nouveautés / Plus tard), mode automatique, message après installation ; thème automatique selon l'heure ; sauvegarde et restauration des réglages |
 | 1.2.9 | Tri mémorisé dossier par dossier (plus de tri global) ; bouton réseau du bas retiré (choix de la carte dans le menu du logo) |
+| 1.3.0 | Grand aperçu au survol des images et vidéos (option, `peek.js`) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
