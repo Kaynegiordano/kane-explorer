@@ -412,6 +412,107 @@ function showFfmpegHelp() {
   };
 }
 
+/* ---------------- Agrandir les images (IA, Real-ESRGAN) ---------------- */
+// Le modèle agrandit ×4 sur la carte graphique, puis Lanczos ramène à ×2 ou ×3 (bords encore plus propres).
+// Résultat enregistré à côté de l'original (nom_x2.png), prompts IA des PNG conservés. Réglages : kane.upscale.
+
+const UPSCALE_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'tif', 'tiff']);
+const UPSCALE_WARN_MP = 120; // au-delà (mégapixels en sortie), prévenir que ce sera long et lourd
+let upscaleBusy = false;
+
+async function openUpscale(list) {
+  if (upscaleBusy) { toast('Un agrandissement est déjà en cours', 'error'); return; }
+  let info;
+  try { info = await invoke('upscale_info', { paths: list.map((e) => e.path) }); }
+  catch (err) { toast(cleanError(err), 'error'); return; }
+  const files = list.filter((_, i) => info.dims[i]);
+  const dims = info.dims.filter(Boolean);
+  if (!files.length) { toast('Format d’image non pris en charge', 'error'); return; }
+  const st = { model: 'illustration', factor: 2, tta: false, ...store.get('upscale', {}) };
+  const radio = (name, value, label, on) =>
+    `<label class="opt"><input type="radio" name="${name}" value="${value}"${on ? ' checked' : ''}> ${label}</label>`;
+
+  openModal(`<h2>Agrandir ${files.length > 1 ? `${files.length} images` : 'l’image'}</h2>
+    <p class="lead">Agrandissement par IA sur la carte graphique (Real-ESRGAN) : bords nets, sans flou ni pixels.
+      L’original n’est pas touché, le résultat est enregistré à côté (<b>nom_x2</b>…).</p>
+    <fieldset><legend>Type d’image</legend>
+      ${radio('up-model', 'illustration', 'Illustration, dessin, image générée par IA', st.model !== 'photo')}
+      ${radio('up-model', 'photo', 'Photo', st.model === 'photo')}
+    </fieldset>
+    <fieldset><legend>Agrandissement</legend>
+      <div class="up-row">${[2, 3, 4].map((f) => radio('up-factor', f, `×${f}`, st.factor === f)).join('')}</div>
+      <p class="up-size" id="up-size"></p>
+    </fieldset>
+    <fieldset><legend>Finition</legend>
+      <label class="opt"><input type="checkbox" id="up-tta"${st.tta ? ' checked' : ''}> Qualité maximale : l’image est traitée 8 fois sous tous les angles (encore plus propre, environ 8 fois plus lent)</label>
+    </fieldset>
+    ${info.engine ? '' : '<p class="lead up-note">Le moteur d’agrandissement (Real-ESRGAN, gratuit) sera d’abord téléchargé une seule fois depuis GitHub (45 Mo).</p>'}
+    <div class="foot"><span></span><div style="display:flex;gap:8px">
+      <button class="btn" data-x="cancel">Annuler</button>
+      <button class="btn primary" data-x="go">${info.engine ? 'Agrandir' : 'Télécharger et agrandir'}</button></div></div>`);
+
+  const read = () => ({
+    model: modalBox.querySelector('[name=up-model]:checked').value,
+    factor: +modalBox.querySelector('[name=up-factor]:checked').value,
+    tta: modalBox.querySelector('#up-tta').checked,
+  });
+  // Les gestionnaires de modalBox restent posés après fermeture : ne rien faire si la fenêtre a changé
+  const showSize = () => {
+    if (!$('up-size')) return;
+    const f = read().factor;
+    const mp = Math.max(...dims.map(([w, h]) => (w * f * h * f) / 1e6));
+    const size = dims.length === 1
+      ? `${dims[0][0]} × ${dims[0][1]} px → <b>${dims[0][0] * f} × ${dims[0][1] * f} px</b>`
+      : `${dims.length} images, chacune ${f} fois plus grande`;
+    $('up-size').innerHTML = size + (mp > UPSCALE_WARN_MP ? `<br><span class="up-warn">Très grande image en sortie (${Math.round(mp)} mégapixels) : ce sera long et gourmand en mémoire.</span>` : '');
+  };
+  showSize();
+  modalBox.onchange = showSize;
+  modalBox.onclick = (ev) => {
+    const x = $('up-size') && ev.target.closest('[data-x]')?.dataset.x;
+    if (x === 'cancel') closeModal();
+    if (x === 'go') { const opts = read(); store.set('upscale', opts); runUpscale(files, opts, !info.engine); }
+  };
+}
+
+async function runUpscale(files, opts, needEngine) {
+  upscaleBusy = true;
+  const label = (t) => { const el = $('up-label'); if (el) el.textContent = t; };
+  modalBox.innerHTML = `<h2>Agrandissement</h2><p class="lead" id="up-label"></p>
+    <div class="up-bar"><i id="up-fill"></i></div>
+    <div class="foot"><span class="up-hint">Vous pouvez fermer cette fenêtre : le travail continue.</span>
+      <button class="btn" data-x="stop">Arrêter</button></div>`;
+  modalBox.onchange = null;
+  modalBox.onclick = (ev) => {
+    if ($('up-fill') && ev.target.closest('[data-x=stop]')) { invoke('upscale_cancel').catch(() => {}); label('Arrêt…'); }
+  };
+  const off = await window.__TAURI__.event.listen('upscale-progress', ({ payload: p }) => {
+    if (p.window !== myLabel) return;
+    const fill = $('up-fill');
+    if (fill) fill.style.width = `${((p.index + p.pct / 100) / p.total) * 100}%`;
+    label(`${p.total > 1 ? `Image ${p.index + 1} sur ${p.total} : ` : ''}${files[p.index]?.name ?? ''} (${Math.floor(p.pct)} %)`);
+  });
+  try {
+    if (needEngine) {
+      label('Téléchargement du moteur d’agrandissement (45 Mo)…');
+      await invoke('upscale_download');
+    }
+    const r = await invoke('upscale_run', { paths: files.map((e) => e.path), model: opts.model, factor: opts.factor, tta: opts.tta });
+    if ($('up-fill')) closeModal();
+    r.errors.forEach((e) => toast(e, 'error'));
+    if (r.cancelled) toast(r.done.length ? `Arrêté : ${r.done.length} image(s) agrandie(s)` : 'Agrandissement arrêté');
+    else if (r.done.length) toast(r.done.length === 1 ? `Créé : ${basename(r.done[0])}` : `${r.done.length} images agrandies`);
+    const last = r.done[r.done.length - 1];
+    if (last && samePath(parentOf(last), tab.path)) { await refresh(true); selectPath(last); }
+  } catch (err) {
+    if ($('up-fill')) closeModal();
+    toast(cleanError(err), 'error');
+  } finally {
+    off();
+    upscaleBusy = false;
+  }
+}
+
 /* ---------------- Menus contextuels ---------------- */
 
 function featureItemMenu(sel, one) {
@@ -421,6 +522,7 @@ function featureItemMenu(sel, one) {
   if (media.length) items.push({ label: 'Visionneuse (tri rapide)', kbd: 'Espace', run: openViewerFromSelection });
   if (imgs.length >= 2 && imgs.length <= 4 && imgs.length === sel.length) items.push({ label: 'Comparer côte à côte', run: () => openCompare(imgs) });
   if (one && IMG_VIEW.has(one.ext)) items.push({ label: 'Définir comme fond d’écran', run: () => setWallpaper(one) });
+  if (sel.length && sel.every((e) => !e.virtual && UPSCALE_EXT.has(e.ext))) items.push({ label: 'Agrandir (IA, sans perte de netteté)…', run: () => openUpscale(sel) });
   // Conversions (même type pour toute la sélection)
   const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && IMG_VIEW.has(e.ext) ? 'image' : 'x')));
   if (kinds.size === 1 && !kinds.has('x')) {

@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.3.5** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.4.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -53,6 +53,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/archive.js` | Archives comme dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`) |
 | `src/backup.js` | Sauvegarde / restauration des réglages (`exportSettings`, `importSettings`, `restoreSettings`) : fichier `Documents\Kane-reglages-AAAA-MM-JJ.json` = tout `kane.*` du localStorage sauf `BACKUP_SKIP` (onglets, étagère, récents, fenêtres…) ; Options → Sauvegarde des réglages |
 | `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
+| `src-tauri/src/upscale.rs` | Agrandir les images par IA : Real-ESRGAN ncnn-vulkan (GPU) toujours ×4 (`realesrgan-x4plus-anime` = « Illustration », `realesrgan-x4plus` = « Photo », `-x` = qualité maximale TTA), puis Lanczos3 (crate `image`) vers ×2 / ×3 ; sortie `nom_xN` à côté (JPG q95, WebP sans perte, sinon PNG avec les blocs tEXt/iTXt/zTXt de l'original recopiés avant IDAT = prompts Forge conservés). Moteur cherché dans `%LOCALAPPDATA%\com.kane.explorer\realesrgan` puis `%APPDATA%\KaneClip\tools\realesrgan` ; sinon téléchargé (release officielle v0.2.5.0, 45 Mo, `curl.exe` de System32 + crate `zip`). Un seul travail à la fois (`Busy`), Arrêter tue le processus (`upscale_cancel`), avancement par l'évènement `upscale-progress` (filtré par libellé de fenêtre). Interface : `openUpscale` / `runUpscale` (features.js), menu « Agrandir (IA, sans perte de netteté)… », réglages `kane.upscale` |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
@@ -240,6 +241,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.3.3 | Zoom et vue mémorisés par dossier ; Alt + molette = historique précédent / suivant ; interface affinée, barre latérale adaptée aux fenêtres étroites, rendu du zoom et du redimensionnement optimisé |
 | 1.3.4 | Visionneuse : clic sur le fond pour fermer ; clics sur le média, zoom, glissers et contrôles conservés |
 | 1.3.5 | Fenêtre sans barre Windows : la bande des onglets déplace la fenêtre (double-clic = agrandir), logo déplaçable, boutons Réduire / Agrandir / Fermer intégrés |
+| 1.4.0 | Agrandir les images par IA (Real-ESRGAN sur la carte graphique) : ×2 / ×3 / ×4, Illustration ou Photo, qualité maximale, prompts IA conservés |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -278,7 +280,7 @@ convertible dans cette page est ignoré par tar. La Corbeille se restaure par `S
 
 Testé : rendu de toutes les vues (captures de la fenêtre), métadonnées IA, comparaison, doublons, analyse disque,
 renommage en lot, miniatures, OneDrive (affichage), registre (test sur clé temporaire), noms traduits, publication.
-**Non testé à la souris** : visionneuse au clavier, survol vidéo, conversions ffmpeg (ffmpeg non installé), bascule
+**Non testé à la souris** : téléchargement du moteur d'agrandissement (le PC de dev réutilise celui de KaneClip), visionneuse au clavier, survol vidéo, conversions ffmpeg (ffmpeg non installé), bascule
 réseau (couperait la connexion), aperçu d'un vrai .docx (Office absent), installateur interactif et Windows + E,
 installation d'une mise à jour depuis l'application.
 

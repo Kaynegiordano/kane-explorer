@@ -344,3 +344,13 @@ body.no-anim #peek { transition: none; }
 #zoom-hint { position: fixed; left: 50%; bottom: 64px; transform: translate(-50%, 8px); z-index: 30; padding: 8px 16px; border-radius: 999px; background: rgba(20, 22, 28, .86); color: #fff; font-size: 13px; pointer-events: none; opacity: 0; transition: opacity .15s ease, transform .15s ease; backdrop-filter: blur(6px); }
 #zoom-hint.on { opacity: 1; transform: translate(-50%, 0); }
 body.no-anim #zoom-hint { transition: none; }
+
+/* Agrandir les images (IA) */
+.modal .up-row { display: flex; gap: 22px; clear: both; }
+.modal .up-size { clear: both; margin: 6px 0 0; color: var(--muted); }
+.modal .up-size b { color: var(--text); font-weight: 600; }
+.modal .up-warn { color: var(--danger); }
+.modal .up-note { margin-top: 12px; }
+.modal .up-bar { height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; margin: 4px 0 16px; }
+.modal .up-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width .25s ease; }
+.modal .up-hint { color: var(--muted); font-size: 12.5px; }

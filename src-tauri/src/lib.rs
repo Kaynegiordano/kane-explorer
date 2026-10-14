@@ -12,6 +12,7 @@ mod win;
 mod columns;
 mod extras;
 mod fsx;
+mod upscale;
 
 #[derive(Serialize)]
 struct Entry {
@@ -900,6 +901,84 @@ async fn convert(path: String, preset: String) -> Result<String, String> {
     .await?
 }
 
+/* ---------- Agrandir les images par IA (voir upscale.rs) ---------- */
+
+fn upscale_own_dir(app: &tauri::AppHandle) -> PathBuf {
+    app.path().app_local_data_dir().unwrap_or_else(|_| std::env::temp_dir()).join("realesrgan")
+}
+
+#[derive(Serialize)]
+struct UpscaleInfo {
+    /// Moteur déjà présent (sinon il faut le télécharger)
+    engine: bool,
+    /// Dimensions de chaque image (None si illisible)
+    dims: Vec<Option<(u32, u32)>>,
+}
+
+#[tauri::command]
+async fn upscale_info(app: tauri::AppHandle, paths: Vec<String>) -> Result<UpscaleInfo, String> {
+    blocking(move || UpscaleInfo {
+        engine: upscale::engine_dir(&upscale_own_dir(&app)).is_some(),
+        dims: paths.iter().map(|p| upscale::dimensions(Path::new(p))).collect(),
+    })
+    .await
+}
+
+#[tauri::command]
+async fn upscale_download(app: tauri::AppHandle) -> Result<(), String> {
+    blocking(move || upscale::download_engine(&upscale_own_dir(&app)).map(|_| ())).await?
+}
+
+#[derive(Serialize, Clone)]
+struct UpscaleProgress {
+    window: String,
+    index: usize,
+    total: usize,
+    pct: f32,
+}
+
+#[derive(Serialize)]
+struct UpscaleResult {
+    done: Vec<String>,
+    errors: Vec<String>,
+    cancelled: bool,
+}
+
+/// Agrandit les images une par une ; l'avancement arrive par l'évènement `upscale-progress`.
+#[tauri::command]
+async fn upscale_run(window: WebviewWindow, paths: Vec<String>, model: String, factor: u32, tta: bool) -> Result<UpscaleResult, String> {
+    let app = window.app_handle().clone();
+    let label = window.label().to_string();
+    blocking(move || -> Result<UpscaleResult, String> {
+        let _busy = upscale::Busy::take()?;
+        let engine = upscale::engine_dir(&upscale_own_dir(&app)).ok_or("Moteur d'agrandissement absent")?;
+        let total = paths.len();
+        let mut r = UpscaleResult { done: Vec::new(), errors: Vec::new(), cancelled: false };
+        for (index, p) in paths.iter().enumerate() {
+            if upscale::cancelled() {
+                break;
+            }
+            let send = |pct: f32| {
+                let _ = app.emit("upscale-progress", UpscaleProgress { window: label.clone(), index, total, pct });
+            };
+            send(0.0);
+            match upscale::upscale(&engine, Path::new(p), &model, factor, tta, |d, n| unique_path(d, n, false), &send) {
+                Ok(out) => r.done.push(out.to_string_lossy().into_owned()),
+                Err(_) if upscale::cancelled() => break,
+                Err(e) => r.errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+            }
+        }
+        r.cancelled = upscale::cancelled();
+        Ok(r)
+    })
+    .await?
+}
+
+#[tauri::command]
+fn upscale_cancel() {
+    upscale::cancel();
+}
+
 #[tauri::command]
 async fn open_in_code(path: String) -> Result<(), String> {
     blocking(move || -> Result<(), String> {
@@ -1178,6 +1257,10 @@ pub fn run() {
             rename_batch,
             tools,
             convert,
+            upscale_info,
+            upscale_download,
+            upscale_run,
+            upscale_cancel,
             open_in_code,
             set_wallpaper,
             media_props,
