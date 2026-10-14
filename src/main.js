@@ -1125,9 +1125,8 @@ function renameSelection() {
   if (i >= 0) startRename(i);
 }
 
-async function copyPaths(paths) {
-  try { await navigator.clipboard.writeText(paths.join('\r\n')); toast(paths.length > 1 ? 'Chemins copiés' : 'Chemin copié'); }
-  catch { toast('Impossible de copier le chemin', 'error'); }
+function copyPaths(paths) {
+  return copyText(paths.join('\r\n'), paths.length > 1 ? 'Chemins copiés' : 'Chemin copié'); // features.js
 }
 
 function toggleHidden() { savePref('showHidden', !prefs.showHidden); render(); renderWindow(true); }

@@ -130,6 +130,40 @@ pub fn open_with(hwnd: HWND, path: &str) -> Result<()> {
 
 /// Place des fichiers dans le presse-papiers Windows (collables dans l'Explorateur).
 pub fn clipboard_set(hwnd: HWND, paths: &[String], cut: bool) -> Result<()> {
+    clipboard_set_ex(hwnd, paths, cut, None)
+}
+
+/// Fichier + image elle-même (PNG et DIB v5) : se colle dans l'Explorateur comme dans Discord, un navigateur, Photoshop…
+pub fn clipboard_set_image(hwnd: HWND, path: &str, png: Vec<u8>, dib: Vec<u8>) -> Result<()> {
+    clipboard_set_ex(hwnd, &[path.to_string()], false, Some((png, dib)))
+}
+
+/// Place du texte dans le presse-papiers (sans passer par le moteur web, qui peut demander une autorisation).
+pub fn clipboard_text(hwnd: HWND, text: &str) -> Result<()> {
+    let mut wide: Vec<u16> = text.encode_utf16().collect();
+    wide.push(0);
+    let bytes: Vec<u8> = wide.iter().flat_map(|c| c.to_le_bytes()).collect();
+    unsafe {
+        let g = global_bytes(&bytes)?;
+        OpenClipboard(Some(hwnd))?;
+        let _ = EmptyClipboard();
+        let r = SetClipboardData(13, Some(HANDLE(g.0))); // CF_UNICODETEXT
+        let _ = CloseClipboard();
+        r.map(|_| ())
+    }
+}
+
+fn global_bytes(data: &[u8]) -> Result<HGLOBAL> {
+    unsafe {
+        let g = GlobalAlloc(GMEM_MOVEABLE, data.len().max(1))?;
+        let p = GlobalLock(g) as *mut u8;
+        std::ptr::copy_nonoverlapping(data.as_ptr(), p, data.len());
+        let _ = GlobalUnlock(g);
+        Ok(g)
+    }
+}
+
+fn clipboard_set_ex(hwnd: HWND, paths: &[String], cut: bool, image: Option<(Vec<u8>, Vec<u8>)>) -> Result<()> {
     unsafe {
         let mut wide: Vec<u16> = Vec::new();
         for p in paths {
@@ -157,6 +191,14 @@ pub fn clipboard_set(hwnd: HWND, paths: &[String], cut: bool) -> Result<()> {
         let r = SetClipboardData(CF_HDROP.0 as u32, Some(HANDLE(files.0)));
         let fmt = RegisterClipboardFormatW(w!("Preferred DropEffect"));
         let _ = SetClipboardData(fmt, Some(HANDLE(effect.0)));
+        if let Some((png, dib)) = image {
+            if let Ok(g) = global_bytes(&png) {
+                let _ = SetClipboardData(RegisterClipboardFormatW(w!("PNG")), Some(HANDLE(g.0)));
+            }
+            if let Ok(g) = global_bytes(&dib) {
+                let _ = SetClipboardData(17, Some(HANDLE(g.0))); // CF_DIBV5 (Windows en déduit CF_DIB et CF_BITMAP)
+            }
+        }
         let _ = CloseClipboard();
         r.map(|_| ())
     }

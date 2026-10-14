@@ -13,6 +13,7 @@ mod columns;
 mod extras;
 mod fsx;
 mod upscale;
+mod imgtools;
 
 #[derive(Serialize)]
 struct Entry {
@@ -835,7 +836,15 @@ async fn extra_places() -> Result<Vec<Place>, String> {
         }
         let mut roots: Vec<PathBuf> = drive_roots().into_iter().map(PathBuf::from).collect();
         roots.extend([dirs::home_dir(), dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir()].into_iter().flatten());
-        for (i, p) in extras::forge_outputs(&roots).into_iter().enumerate() {
+        // Kane OS range les images de Forge dans <lecteur>:KaneOSoutputorge
+        let mut forge = extras::forge_outputs(&roots);
+        for d in drive_roots() {
+            let p = PathBuf::from(d).join("KaneOS").join("output").join("forge");
+            if p.is_dir() && !forge.contains(&p) {
+                forge.insert(0, p);
+            }
+        }
+        for (i, p) in forge.into_iter().enumerate() {
             push(if i == 0 { "Images Forge".into() } else { format!("Images Forge ({})", i + 1) }, p, "forge");
         }
         out
@@ -977,6 +986,37 @@ async fn upscale_run(window: WebviewWindow, paths: Vec<String>, model: String, f
 #[tauri::command]
 fn upscale_cancel() {
     upscale::cancel();
+}
+
+/// Copies « nom_partage » sans prompts ni EXIF. Renvoie les fichiers créés (les erreurs en toasts).
+#[tauri::command]
+async fn strip_metadata(paths: Vec<String>) -> Result<(Vec<String>, Vec<String>), String> {
+    blocking(move || {
+        let (mut done, mut errors) = (Vec::new(), Vec::new());
+        for p in &paths {
+            match imgtools::strip_metadata(Path::new(p), |d, n| unique_path(d, n, false)) {
+                Ok(out) => done.push(out.to_string_lossy().into_owned()),
+                Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+            }
+        }
+        (done, errors)
+    })
+    .await
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn clipboard_text(window: WebviewWindow, text: String) -> Result<(), String> {
+    on_main(&window, move |hwnd| win::clipboard_text(hwnd, &text)).await?.map_err(err)
+}
+
+/// Copie une image : le fichier ET ses pixels (pour la coller dans Discord, un navigateur, un logiciel de dessin).
+#[cfg(windows)]
+#[tauri::command]
+async fn clipboard_image(window: WebviewWindow, path: String) -> Result<(), String> {
+    let p = path.clone();
+    let (png, dib) = blocking(move || imgtools::clipboard_image(Path::new(&p))).await??;
+    on_main(&window, move |hwnd| win::clipboard_set_image(hwnd, &path, png, dib)).await?.map_err(err)
 }
 
 #[tauri::command]
@@ -1261,6 +1301,9 @@ pub fn run() {
             upscale_download,
             upscale_run,
             upscale_cancel,
+            strip_metadata,
+            clipboard_image,
+            clipboard_text,
             open_in_code,
             set_wallpaper,
             media_props,

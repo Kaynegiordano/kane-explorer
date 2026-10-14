@@ -21,6 +21,8 @@ const assetOrThumb = (e, size) => (IMG_VIEW.has(e.ext) ? convertFileSrc(e.path) 
 document.addEventListener('mousemove', (ev) => { lastMouse = { x: ev.clientX, y: ev.clientY }; }, { passive: true });
 
 async function copyText(text, label = 'Copié') {
+  // Par Windows (pas d'autorisation à demander, marche même après une attente), sinon par le moteur web
+  try { await invoke('clipboard_text', { text }); toast(label); return; } catch { /* repli */ }
   try { await navigator.clipboard.writeText(text); toast(label); }
   catch { toast('Impossible de copier', 'error'); }
 }
@@ -420,7 +422,8 @@ const UPSCALE_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'bmp', 'gif', 'tif', 
 const UPSCALE_WARN_MP = 120; // au-delà (mégapixels en sortie), prévenir que ce sera long et lourd
 let upscaleBusy = false;
 
-async function openUpscale(list) {
+/** `onDone(chemins créés)` : utilisé par la visionneuse pour afficher le résultat. */
+async function openUpscale(list, onDone) {
   if (upscaleBusy) { toast('Un agrandissement est déjà en cours', 'error'); return; }
   let info;
   try { info = await invoke('upscale_info', { paths: list.map((e) => e.path) }); }
@@ -471,11 +474,11 @@ async function openUpscale(list) {
   modalBox.onclick = (ev) => {
     const x = $('up-size') && ev.target.closest('[data-x]')?.dataset.x;
     if (x === 'cancel') closeModal();
-    if (x === 'go') { const opts = read(); store.set('upscale', opts); runUpscale(files, opts, !info.engine); }
+    if (x === 'go') { const opts = read(); store.set('upscale', opts); runUpscale(files, opts, !info.engine, onDone); }
   };
 }
 
-async function runUpscale(files, opts, needEngine) {
+async function runUpscale(files, opts, needEngine, onDone) {
   upscaleBusy = true;
   const label = (t) => { const el = $('up-label'); if (el) el.textContent = t; };
   modalBox.innerHTML = `<h2>Agrandissement</h2><p class="lead" id="up-label"></p>
@@ -504,6 +507,7 @@ async function runUpscale(files, opts, needEngine) {
     else if (r.done.length) toast(r.done.length === 1 ? `Créé : ${basename(r.done[0])}` : `${r.done.length} images agrandies`);
     const last = r.done[r.done.length - 1];
     if (last && samePath(parentOf(last), tab.path)) { await refresh(true); selectPath(last); }
+    onDone?.(r.done);
   } catch (err) {
     if ($('up-fill')) closeModal();
     toast(cleanError(err), 'error');
@@ -511,6 +515,38 @@ async function runUpscale(files, opts, needEngine) {
     off();
     upscaleBusy = false;
   }
+}
+
+/* ---------------- Image et IA : copier, prompts, copie à partager ---------------- */
+
+const STRIP_EXT = new Set(['png', 'jpg', 'jpeg', 'webp']);
+
+/** Copies « nom_partage » sans prompt ni EXIF (les pixels ne sont pas réencodés). */
+async function stripMeta(list) {
+  try {
+    const [done, errors] = await invoke('strip_metadata', { paths: list.map((e) => e.path) });
+    errors.forEach((m) => toast(m, 'error'));
+    if (done.length) toast(done.length === 1 ? `Créé sans informations cachées : ${basename(done[0])}` : `${done.length} copies sans informations cachées`);
+    const last = done[done.length - 1];
+    if (last && samePath(parentOf(last), tab.path)) { await refresh(true); selectPath(last); }
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+function imageAiMenu(sel, one) {
+  const items = [];
+  if (one) items.push({ label: 'Copier l’image (à coller dans Discord, Forge…)', run: () => copyImage(one) });
+  if (one && AI_EXT.has(one.ext)) {
+    items.push(
+      { label: 'Copier le prompt', run: () => copyAiField(one, 'prompt') },
+      { label: 'Copier le prompt négatif', run: () => copyAiField(one, 'negative') },
+      { label: 'Copier tous les paramètres', run: () => copyAiField(one, 'all') },
+    );
+  }
+  if (sel.every((e) => STRIP_EXT.has(e.ext))) {
+    if (items.length) items.push('-');
+    items.push({ label: sel.length > 1 ? `Copies sans prompt ni EXIF (${sel.length}), pour partager` : 'Copie sans prompt ni EXIF, pour partager', run: () => stripMeta(sel) });
+  }
+  return items;
 }
 
 /* ---------------- Menus contextuels ---------------- */
@@ -522,7 +558,11 @@ function featureItemMenu(sel, one) {
   if (media.length) items.push({ label: 'Visionneuse (tri rapide)', kbd: 'Espace', run: openViewerFromSelection });
   if (imgs.length >= 2 && imgs.length <= 4 && imgs.length === sel.length) items.push({ label: 'Comparer côte à côte', run: () => openCompare(imgs) });
   if (one && IMG_VIEW.has(one.ext)) items.push({ label: 'Définir comme fond d’écran', run: () => setWallpaper(one) });
-  if (sel.length && sel.every((e) => !e.virtual && UPSCALE_EXT.has(e.ext))) items.push({ label: 'Agrandir (IA, sans perte de netteté)…', run: () => openUpscale(sel) });
+  if (sel.length && sel.every((e) => !e.virtual && UPSCALE_EXT.has(e.ext))) {
+    items.push({ label: 'Agrandir (IA, sans perte de netteté)…', run: () => openUpscale(sel) });
+    const sub = imageAiMenu(sel, one);
+    if (sub.length) items.push({ label: 'Image et IA', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, sub) });
+  }
   // Conversions (même type pour toute la sélection)
   const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && IMG_VIEW.has(e.ext) ? 'image' : 'x')));
   if (kinds.size === 1 && !kinds.has('x')) {
@@ -678,11 +718,15 @@ function showViewerShell(mode) {
   if (nativeOpen) invoke('native_preview_visible', { visible: false }).catch(() => {});
   viewerEl.hidden = false;
   viewerEl.dataset.mode = mode;
+  viewerEl.dataset.bg = store.get('viewerBg', 'dark');
 }
 
 function closeViewer() {
   if (viewerEl.hidden) return;
   const last = vw?.mode === 'single' ? vw.list[vw.i] : null;
+  clearInterval(vw?.show);
+  if (viewerEl.classList.contains('fs')) viewerFullscreen(false);
+  viewerEl.classList.remove('fs', 'idle');
   viewerEl.hidden = true;
   viewerEl.innerHTML = '';
   viewerBackdropPress = null;
@@ -692,24 +736,40 @@ function closeViewer() {
   els.content.focus();
 }
 
+const VW_ICONS = {
+  bg: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12h16M12 4v16"/></svg>',
+  strip: '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M9 7v10M15 7v10"/></svg>',
+  show: '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  fs: '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+};
+
 function openViewer(list, i) {
   if (!list.length) return;
-  vw = { list: [...list], i, info: store.get('viewerInfo', true), mode: 'single' };
+  vw = { list: [...list], i, info: store.get('viewerInfo', true), strip: store.get('viewerStrip', true), mode: 'single' };
   showViewerShell('single');
   viewerEl.innerHTML = `
     <div class="vw-top">
-      <span class="vw-title"></span><span class="vw-count"></span><span class="grow"></span>
+      <span class="vw-title"></span><span class="vw-dims"></span><span class="vw-count"></span><span class="grow"></span>
+      <button data-v="upscale" class="accent" title="Agrandir par IA, sans perte de netteté (U)">Agrandir IA</button>
+      <button data-v="copy" title="Copier l’image, à coller dans Discord, Forge… (Ctrl+C) · Ctrl+Maj+C : copier le prompt">Copier</button>
       <button data-v="open" title="Ouvrir avec l’application par défaut (Entrée)">Ouvrir</button>
-      <button data-v="info" title="Infos (I)">Infos</button>
+      <button data-v="openwith" title="Ouvrir avec un autre logiciel (O)">Ouvrir avec…</button>
+      <button data-v="info" title="Infos et prompt (I)">Infos</button>
       <button data-v="keep" title="Étiquette verte (G)">Garder</button>
       <button data-v="tag" title="Étiquette (1-6)">Étiquette</button>
       <button data-v="rate" title="Note (Alt+1 à Alt+5)">Note ★</button>
       <button data-v="trash" class="danger" title="Corbeille (Suppr)">Corbeille</button>
+      <span class="vw-sep"></span>
+      <button data-v="bg" class="ico" title="Fond : sombre, damier (transparence), clair (B)">${VW_ICONS.bg}</button>
+      <button data-v="strip" class="ico" title="Bande de miniatures (T)">${VW_ICONS.strip}</button>
+      <button data-v="show" class="ico" title="Diaporama (P)">${VW_ICONS.show}</button>
+      <button data-v="fs" class="ico" title="Plein écran (F11)">${VW_ICONS.fs}</button>
       <button data-v="close" title="Fermer (Échap)">✕</button>
     </div>
     <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside>
       <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Niveau de zoom"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zreal" title="Taille réelle / ajuster (Z ou double-clic)">1:1</button><button data-v="zfit" title="Ajuster à la fenêtre (F)">Ajuster</button></div></div>
-    <div class="vw-help">Molette : zoom · glisser : déplacer · double-clic : 1:1 · ← → : image suivante (ou Maj + molette) · Entrée ouvrir · G garder · 1-6 étiquettes · Alt+1-5 note · Suppr Corbeille · I infos · clic sur le fond ou Échap : fermer</div>`;
+    <div class="vw-strip"></div>
+    <div class="vw-help">Molette : zoom · glisser l’image : l’envoyer vers un autre logiciel (zoomée : la déplacer) · ← → image suivante · U agrandir IA · Ctrl+C copier · B fond · T miniatures · P diaporama · F11 plein écran · G garder · Suppr Corbeille · Échap fermer</div>`;
   const stage = viewerEl.querySelector('.vw-stage');
   stage.addEventListener('pointerdown', zoomPanStart);
   // (pendant un déplacement, la capture du pointeur fait de la scène la cible : on ne teste pas l'image)
@@ -786,7 +846,29 @@ function zoomToggleReal(cx, cy, box) {
   zoomAt(Math.max(1 / zoomFit(img), 2), cx, cy);
 }
 
+/** Glisser l'image affichée (non zoomée, ou avec Alt) vers un autre logiciel : Discord, Forge, un dossier… */
+function viewerDragOut(ev) {
+  const e = vw.list[vw.i];
+  const sx = ev.clientX, sy = ev.clientY;
+  const stop = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', stop);
+    window.removeEventListener('pointercancel', stop);
+  };
+  const move = (m) => {
+    if (Math.hypot(m.clientX - sx, m.clientY - sy) < 8) return;
+    stop();
+    viewerBackdropPress = null;
+    showDragBar();
+    invoke('start_drag', { paths: [e.path] }).catch((err) => toast(cleanError(err), 'error')).finally(hideDragBar);
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
+}
+
 function zoomPanStart(ev) {
+  if (ev.button === 0 && zoomImg() && ev.target === zoomImg() && (vw.z.s <= 1.001 || ev.altKey)) { viewerDragOut(ev); return; }
   if (ev.button !== 0 || !zoomImg() || vw.z.s <= 1.001) return;
   ev.preventDefault();
   const stage = ev.currentTarget;
@@ -892,10 +974,19 @@ function showViewerItem() {
     stage.innerHTML = isVideo
       ? `<video src="${convertFileSrc(e.path)}" controls autoplay loop></video>`
       : `<img src="${assetOrThumb(e, 1024)}" alt="" draggable="false">`;
-    stage.querySelector('img')?.addEventListener('load', zoomApply);
+    const dims = viewerEl.querySelector('.vw-dims');
+    dims.textContent = '';
+    stage.querySelector('img')?.addEventListener('load', (ev) => {
+      zoomApply();
+      // (les formats non affichables passent par une miniature : ses dimensions ne sont pas celles du fichier)
+      if (IMG_VIEW.has(e.ext)) dims.textContent = `${ev.target.naturalWidth} × ${ev.target.naturalHeight}`;
+    });
+    stage.querySelector('video')?.addEventListener('loadedmetadata', (ev) => { dims.textContent = `${ev.target.videoWidth} × ${ev.target.videoHeight}`; });
   }
   viewerEl.querySelector('.vw-zoom').hidden = isVideo;
+  viewerEl.querySelector('[data-v="upscale"]').hidden = !UPSCALE_EXT.has(e.ext);
   zoomApply();
+  renderStrip();
   viewerEl.querySelector('.vw-title').innerHTML = `${tagDot(e)}${esc(e.name)} ${ratingBadge(e)}`;
   viewerEl.querySelector('.vw-count').textContent = `${vw.i + 1} / ${vw.list.length}`;
   viewerEl.querySelector('.vw-info').hidden = !vw.info;
@@ -932,6 +1023,7 @@ async function viewerTrash() {
     toast(`« ${e.name} » → Corbeille`);
   } catch (err) { toast(cleanError(err), 'error'); showViewerItem(); return; }
   vw.list.splice(vw.i, 1);
+  stripReset();
   if (!vw.list.length) { closeViewer(); return; }
   vw.i = Math.min(vw.i, vw.list.length - 1);
   showViewerItem();
@@ -948,6 +1040,107 @@ function viewerTag(color, advance) {
 function viewerGo(d) {
   const n = vw.list.length;
   vw.i = Math.max(0, Math.min(n - 1, vw.i + d));
+  showViewerItem();
+}
+
+/* ----- Bande de miniatures : seules ~80 miniatures autour de l'image affichée sont dans le DOM ----- */
+
+const STRIP_SPAN = 40;
+function renderStrip() {
+  const strip = viewerEl.querySelector('.vw-strip');
+  if (!strip || !vw) return;
+  strip.hidden = !vw.strip || vw.list.length < 2;
+  viewerEl.querySelector('[data-v="strip"]')?.classList.toggle('on', vw.strip);
+  if (strip.hidden) return;
+  const r = vw.stripRange;
+  // Reconstruire seulement près des bords de la plage affichée (ou si la liste a changé)
+  const inside = r && r.list === vw.list.length && vw.i >= r.from && vw.i < r.to
+    && (vw.i - r.from >= 10 || r.from === 0) && (r.to - vw.i > 10 || r.to === vw.list.length);
+  if (!inside) {
+    const from = Math.max(0, vw.i - STRIP_SPAN), to = Math.min(vw.list.length, vw.i + STRIP_SPAN + 1);
+    vw.stripRange = { from, to, list: vw.list.length };
+    strip.innerHTML = vw.list.slice(from, to).map((e, k) =>
+      `<button class="vw-th" data-v="goto" data-k="${from + k}" title="${esc(e.name)}"><img src="${thumbUrl(e, 88)}" alt="" loading="lazy" draggable="false"></button>`).join('');
+  }
+  strip.querySelector('.cur')?.classList.remove('cur');
+  const cur = strip.querySelector(`[data-k="${vw.i}"]`);
+  cur?.classList.add('cur');
+  cur?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: inside ? 'smooth' : 'auto' });
+}
+
+/** La liste a changé (Corbeille, image ajoutée) : la bande sera reconstruite. */
+const stripReset = () => { if (vw) vw.stripRange = null; };
+
+/* ----- Plein écran (la fenêtre entière), barres masquées quand la souris ne bouge plus ----- */
+
+async function viewerFullscreen(on) {
+  const cur = await appWin.isFullscreen().catch(() => false);
+  if (on === undefined) on = !cur;
+  if (on !== cur) await appWin.setFullscreen(on).catch((err) => toast(cleanError(err), 'error'));
+  viewerEl.classList.toggle('fs', on && !viewerEl.hidden);
+  viewerEl.querySelector('[data-v="fs"]')?.classList.toggle('on', on);
+  viewerIdle();
+}
+
+let vwIdleTimer = 0;
+function viewerIdle() {
+  viewerEl.classList.remove('idle');
+  clearTimeout(vwIdleTimer);
+  if (viewerEl.classList.contains('fs')) vwIdleTimer = setTimeout(() => viewerEl.classList.add('idle'), 2200);
+}
+viewerEl.addEventListener('pointermove', viewerIdle);
+
+/* ----- Diaporama, fond ----- */
+
+const SLIDE_MS = 3500;
+function toggleSlideshow(on = !vw.show) {
+  clearInterval(vw.show);
+  vw.show = on ? setInterval(() => {
+    if (!vw || viewerEl.hidden) return;
+    if (vw.i >= vw.list.length - 1) { toggleSlideshow(false); toast('Fin du diaporama'); } else viewerGo(1);
+  }, SLIDE_MS) : null;
+  viewerEl.querySelector('[data-v="show"]')?.classList.toggle('on', !!vw.show);
+  if (on) toast(`Diaporama : une image toutes les ${SLIDE_MS / 1000} s (P pour arrêter)`);
+}
+
+const VW_BGS = ['dark', 'checker', 'light'];
+const VW_BG_LABELS = { dark: 'Fond sombre', checker: 'Fond en damier (transparence visible)', light: 'Fond clair' };
+function cycleViewerBg() {
+  const next = VW_BGS[(VW_BGS.indexOf(viewerEl.dataset.bg) + 1) % VW_BGS.length];
+  viewerEl.dataset.bg = next;
+  store.set('viewerBg', next);
+  toast(VW_BG_LABELS[next]);
+}
+
+/* ----- Copier l'image / le prompt (aussi depuis le clic droit) ----- */
+
+async function copyImage(e) {
+  try {
+    if (UPSCALE_EXT.has(e.ext)) {
+      await invoke('clipboard_image', { path: e.path });
+      toast('Image copiée : collez-la dans Discord, Forge, un logiciel de dessin… ou un dossier');
+    } else {
+      await invoke('clipboard_set', { paths: [e.path], cut: false });
+      toast('Fichier copié');
+    }
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+async function copyAiField(e, field) {
+  const ai = aiMeta(await invoke('image_meta', { path: e.path }).catch(() => []));
+  const text = ai && (field === 'prompt' ? ai.prompt : field === 'negative' ? ai.negative : ai.raw);
+  if (!text) { toast(ai ? 'Rien à copier' : 'Aucun paramètre de génération IA dans ce fichier', 'error'); return; }
+  copyText(text, field === 'prompt' ? 'Prompt copié' : field === 'negative' ? 'Prompt négatif copié' : 'Paramètres copiés (à coller dans l’onglet PNG Info de Forge)');
+}
+
+/** Images créées depuis la visionneuse (agrandissement) : affichées juste après l'image d'origine. */
+function viewerInsert(paths) {
+  if (!vw || vw.mode !== 'single' || !paths.length) return;
+  const entries = paths.map((p) => tab.items.find((x) => samePath(x.path, p))
+    || { name: basename(p), path: p, ext: p.split('.').pop().toLowerCase(), kind: 'image', size: 0, modified: 0 });
+  vw.list.splice(vw.i + 1, 0, ...entries);
+  vw.i++;
+  stripReset();
   showViewerItem();
 }
 
@@ -988,11 +1181,26 @@ viewerEl.addEventListener('click', async (ev) => {
     closeViewer();
     return;
   }
+  // Boutons du panneau Infos (copier le prompt, le seed…) : mêmes actions que le volet d'aperçu
+  const pv = ev.target.closest('[data-pv]');
+  if (pv && vw?.mode === 'single') {
+    previewAction(pv.dataset.pv, vw.list[vw.i], pv);
+    if (pv.dataset.pv === 'same-model') closeViewer();
+    return;
+  }
   const b = ev.target.closest('[data-v]');
   if (!b || !vw) return;
   const k = +b.dataset.k;
   switch (b.dataset.v) {
     case 'close': closeViewer(); break;
+    case 'goto': vw.i = k; showViewerItem(); break;
+    case 'upscale': openUpscale([vw.list[vw.i]], viewerInsert); break;
+    case 'copy': copyImage(vw.list[vw.i]); break;
+    case 'openwith': openWith(vw.list[vw.i].path); break;
+    case 'bg': cycleViewerBg(); break;
+    case 'strip': vw.strip = !vw.strip; store.set('viewerStrip', vw.strip); renderStrip(); zoomApply(); break;
+    case 'show': toggleSlideshow(); break;
+    case 'fs': viewerFullscreen(); break;
     case 'prev': viewerGo(-1); break;
     case 'next': viewerGo(1); break;
     case 'zin': zoomAt(1.5); break;
@@ -1046,11 +1254,23 @@ viewerEl.addEventListener('wheel', (ev) => {
 
 // Clavier de la visionneuse (prioritaire sur le reste de l'application)
 document.addEventListener('keydown', (ev) => {
-  if (viewerEl.hidden || !vw) return;
+  if (viewerEl.hidden || !vw || !modal.hidden) return; // une fenêtre (agrandir…) garde son clavier
   if (!els.menu.hidden && ev.key !== 'Escape') return;
   ev.stopImmediatePropagation();
   ev.preventDefault();
-  if (ev.key === 'Escape') { if (!els.menu.hidden) hideMenu(); else closeViewer(); return; }
+  viewerIdle();
+  if (ev.key === 'Escape') {
+    if (!els.menu.hidden) hideMenu();
+    else if (viewerEl.classList.contains('fs')) viewerFullscreen(false);
+    else closeViewer();
+    return;
+  }
+  if (ev.key === 'F11') { viewerFullscreen(); return; }
+  if (vw.mode === 'single' && (ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
+    const e = vw.list[vw.i];
+    if (ev.shiftKey) copyAiField(e, 'prompt'); else copyImage(e);
+    return;
+  }
   if (vw.mode === 'compare' && !ev.ctrlKey && !ev.metaKey) {
     if (ev.key === '+' || ev.key === '=') zoomAt(1.5);
     else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.5);
@@ -1073,6 +1293,11 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key === 'End') viewerGo(1e9);
   else if (ev.key === 'Delete') viewerTrash();
   else if (ev.key.toLowerCase() === 'g') viewerTag('vert', true);
+  else if (ev.key.toLowerCase() === 'u') { if (UPSCALE_EXT.has(vw.list[vw.i].ext)) openUpscale([vw.list[vw.i]], viewerInsert); }
+  else if (ev.key.toLowerCase() === 'b') cycleViewerBg();
+  else if (ev.key.toLowerCase() === 't') viewerEl.querySelector('[data-v="strip"]').click();
+  else if (ev.key.toLowerCase() === 'p') toggleSlideshow();
+  else if (ev.key.toLowerCase() === 'o') openWith(vw.list[vw.i].path);
   else if (ev.key.toLowerCase() === 'i') { vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); }
   else if (/^[1-6]$/.test(ev.key)) viewerTag(TAG_NAMES[+ev.key - 1], false);
   else if (ev.key === '0') viewerTag(null, false);

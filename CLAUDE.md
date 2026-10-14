@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.4.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.5.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -54,6 +54,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/backup.js` | Sauvegarde / restauration des réglages (`exportSettings`, `importSettings`, `restoreSettings`) : fichier `Documents\Kane-reglages-AAAA-MM-JJ.json` = tout `kane.*` du localStorage sauf `BACKUP_SKIP` (onglets, étagère, récents, fenêtres…) ; Options → Sauvegarde des réglages |
 | `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
 | `src-tauri/src/upscale.rs` | Agrandir les images par IA : Real-ESRGAN ncnn-vulkan (GPU) toujours ×4 (`realesrgan-x4plus-anime` = « Illustration », `realesrgan-x4plus` = « Photo », `-x` = qualité maximale TTA), puis Lanczos3 (crate `image`) vers ×2 / ×3 ; sortie `nom_xN` à côté (JPG q95, WebP sans perte, sinon PNG avec les blocs tEXt/iTXt/zTXt de l'original recopiés avant IDAT = prompts Forge conservés). Moteur cherché dans `%LOCALAPPDATA%\com.kane.explorer\realesrgan` puis `%APPDATA%\KaneClip\tools\realesrgan` ; sinon téléchargé (release officielle v0.2.5.0, 45 Mo, `curl.exe` de System32 + crate `zip`). Un seul travail à la fois (`Busy`), Arrêter tue le processus (`upscale_cancel`), avancement par l'évènement `upscale-progress` (filtré par libellé de fenêtre). Interface : `openUpscale` / `runUpscale` (features.js), menu « Agrandir (IA, sans perte de netteté)… », réglages `kane.upscale` |
+| `src-tauri/src/imgtools.rs` | `strip_metadata` : copie « nom_partage » sans prompt ni EXIF, sans réencoder (PNG : retire tEXt/iTXt/zTXt/eXIf/tIME ; JPEG : APP1/APP13/COM, garde APP2 ICC ; WebP : EXIF/XMP + drapeaux VP8X) ; `clipboard_image` : PNG + DIB v5 32 bits pour le presse-papiers |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
@@ -117,6 +118,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   Vue, densité et taille sont désormais mémorisées **par dossier** dans `kane.viewByFolder` (`syncFolderView`, `saveFolderView`, chemins normalisés, 800 dossiers maximum), synchronisées entre fenêtres et incluses dans les sauvegardes de réglages. Les anciens réglages globaux servent de valeurs par défaut. Les boutons liste / grille règlent aussi le dossier courant.
   Alt + molette = lieu précédent (haut) / suivant (bas) dans l'historique de l'onglet actif (`goHistory`), y compris depuis l'accueil. Le zoom est désactivé à l'accueil. Les deux raccourcis sont désactivés dans la visionneuse, les boîtes de dialogue, le volet d'aperçu et la palette.
   Le zoom conserve un repère de défilement et ne retrie pas les fichiers ; le redimensionnement conserve les éléments DOM si le nombre de colonnes ne change pas. `goHistory` sérialise les navigations et restaure l'index si la destination est inaccessible.
+- **Visionneuse 1.5.0** (features.js) : `renderStrip` (bande de miniatures, ~80 dans le DOM autour de l'image, reconstruite près des bords ou après `stripReset`), `viewerFullscreen` (fenêtre entière via `appWin.setFullscreen`, permission `allow-set-fullscreen` ; classe `.fs`, barres flottantes masquées après 2,2 s sans souris : `.idle`) ; Échap sort d'abord du plein écran ; `toggleSlideshow` (3,5 s), `cycleViewerBg` (`kane.viewerBg`, attribut `data-bg`), `kane.viewerStrip`. Glisser l'image non zoomée (ou Alt + glisser) = `start_drag` vers un autre logiciel (`viewerDragOut`). `copyImage` : `clipboard_image` (CF_HDROP + « PNG » + CF_DIBV5, vérifié : Bitmap 1856×1024 + FileDrop). `copyText` passe par `clipboard_text` (CF_UNICODETEXT) : `navigator.clipboard` ouvrait une demande d'autorisation WebView2 sans geste récent. Le clavier de la visionneuse laisse passer les touches quand une modale est ouverte (`!modal.hidden`). `openUpscale(list, onDone)` → `viewerInsert`.
 - **Fermeture de la visionneuse par le fond** (1.3.4, viewerBackdropPress, features.js) : cible du pointerdown mémorisée avant la capture par le déplacement ; clic simple sur .vw-stage, .vw-main ou .vw-help ferme en vue simple. Un mouvement de plus de 5 px, une annulation ou un clic initial sur le média ne ferme pas. Panneau Infos, boutons et comparaison conservés.
 - **Grand aperçu au survol** (`src/peek.js`, `#peek` dans creative.css, option `prefs.peek`) : souris immobile 550 ms sur une image ou une vidéo
   (liste ou grille ; pas les fichiers OneDrive en ligne ni les archives) → vignette flottante près du curseur (image : `assetOrThumb(e, 720)` ;
@@ -242,6 +244,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.3.4 | Visionneuse : clic sur le fond pour fermer ; clics sur le média, zoom, glissers et contrôles conservés |
 | 1.3.5 | Fenêtre sans barre Windows : la bande des onglets déplace la fenêtre (double-clic = agrandir), logo déplaçable, boutons Réduire / Agrandir / Fermer intégrés |
 | 1.4.0 | Agrandir les images par IA (Real-ESRGAN sur la carte graphique) : ×2 / ×3 / ×4, Illustration ou Photo, qualité maximale, prompts IA conservés |
+| 1.5.0 | Visionneuse : Agrandir IA (U, le résultat s'affiche après l'original), Copier l'image (Ctrl+C, pixels + fichier) / le prompt (Ctrl+Maj+C), Ouvrir avec, bande de miniatures (T), fonds sombre / damier / clair (B), diaporama (P), plein écran (F11), glisser l'image vers un autre logiciel, dimensions ; boutons du panneau IA actifs dans la visionneuse. Clic droit « Image et IA › » (copier image / prompt / négatif / paramètres, copie sans prompt ni EXIF). Copies de texte par le presse-papiers Windows. « Images Forge » = C:\KaneOS\output\forge |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
