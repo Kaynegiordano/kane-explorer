@@ -130,6 +130,16 @@ main { display: flex; flex-direction: column; min-width: 0; min-height: 0; backg
 .tab .close svg { width: 12px; height: 12px; }
 .new-tab { margin-bottom: 3px; }
 
+/* Barre de titre maison (fenêtre sans cadre Windows) : la bande des onglets déplace la fenêtre */
+.drag-space { flex: 1 0 48px; align-self: stretch; }
+.winctl { display: flex; align-self: stretch; margin: -6px -8px 0 0; flex: none; }
+.winctl button {
+  width: 46px; display: grid; place-items: center; color: var(--text);
+  font: 10px "Segoe Fluent Icons", "Segoe MDL2 Assets"; transition: background-color .1s ease;
+}
+.winctl button:hover { background: var(--hover); }
+.winctl .close-win:hover { background: #c42b1c; color: #fff; }
+
 .toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--bg) 35%, var(--panel)); }
 .nav-buttons { display: flex; gap: 2px; }
 .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; }

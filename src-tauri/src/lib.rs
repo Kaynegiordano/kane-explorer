@@ -503,6 +503,7 @@ fn open_window(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
         .title("Kane Explorer")
         .inner_size(1200.0, 760.0)
         .min_inner_size(720.0, 480.0)
+        .decorations(false)
         .initialization_script(format!("window.__KANE_START__ = {start};"))
         .build()
         .map_err(err)?;

@@ -506,6 +506,52 @@ els.tabs.addEventListener('click', (ev) => {
 els.tabs.addEventListener('dblclick', (ev) => { if (!ev.target.closest('.tab')) newTab(); });
 els.newTab.onclick = () => newTab();
 
+/* ---------------- Barre de titre maison ---------------- */
+// La fenêtre n'a plus de cadre Windows : le vide de la bande des onglets la déplace (double-clic = agrandir /
+// restaurer), le logo aussi dès qu'on le tire de quelques pixels (un simple clic ouvre toujours son menu).
+const appWin = window.__TAURI__.window.getCurrentWindow();
+const winMax = document.querySelector('#winctl [data-win="max"]');
+$('winctl').addEventListener('click', (ev) => {
+  const a = ev.target.closest('[data-win]')?.dataset.win;
+  if (a === 'min') appWin.minimize();
+  else if (a === 'max') appWin.toggleMaximize();
+  else if (a === 'close') appWin.close();
+});
+async function syncMaximized() {
+  const max = await appWin.isMaximized().catch(() => false);
+  winMax.textContent = max ? '' : '';
+  winMax.title = max ? 'Niveau inférieur' : 'Agrandir';
+}
+appWin.onResized(syncMaximized);
+syncMaximized();
+
+$('tabbar').addEventListener('mousedown', (ev) => {
+  if (ev.button !== 0 || ev.target.closest('.tab, button, input')) return;
+  ev.preventDefault();
+  if (ev.detail === 2) appWin.toggleMaximize();
+  else appWin.startDragging();
+});
+
+const brandEl = document.querySelector('.sidebar .brand');
+let brandPress = null, brandDragged = false;
+brandEl.addEventListener('mousedown', (ev) => {
+  brandDragged = false;
+  if (ev.button === 0) brandPress = { x: ev.clientX, y: ev.clientY };
+});
+document.addEventListener('mousemove', (ev) => {
+  if (!brandPress) return;
+  if (!(ev.buttons & 1)) { brandPress = null; return; }
+  if (Math.hypot(ev.clientX - brandPress.x, ev.clientY - brandPress.y) < 4) return;
+  brandPress = null;
+  brandDragged = true;
+  appWin.startDragging();
+});
+document.addEventListener('mouseup', () => { brandPress = null; });
+// Pas de menu du logo après un déplacement (écouteur de capture : passe avant celui de features.js)
+brandEl.addEventListener('click', (ev) => {
+  if (brandDragged) { brandDragged = false; ev.stopImmediatePropagation(); }
+}, true);
+
 /* ---------------- Surveillance du dossier ---------------- */
 
 let renaming = false;

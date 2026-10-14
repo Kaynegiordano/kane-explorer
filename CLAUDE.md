@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.3.4** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.3.5** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -24,7 +24,8 @@ Installateur NSIS ~2 Mo, en français.
 - Réseau : Ethernet « CPL » (Realtek PCIe), adaptateur USB « Reseau Principal » (Realtek USB GbE, branché par
   intermittence), « Wi-Fi 2 » (Intel AX210).
 - Veut du simple, léger, rapide, moderne, « comme l'officiel Windows ». Valide les publications par
-  « **commit et publie** » : ne publier une Release qu'après cette demande explicite.
+  « **commit et publie** ». Depuis le 14/10/2026 : après chaque modification, **toujours** commit, Release GitHub
+  (`scripts/release.ps1`) et copie de l'installateur dans `Setup/` (`Kane Explorer <version> - Installation.exe`), sans redemander.
 
 ## 3. Environnement de développement
 
@@ -176,6 +177,13 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   (la plage peut passer minuit), sombre sinon ; `applyLook` est rappelée toutes les 30 s.
 - **Fenêtre** : taille par défaut 1200×1190 (zone de contenu ; minimum 720×480), réduite et recentrée au démarrage (`setup` de lib.rs)
   si l'écran est plus petit (hauteur d'écran − 110, largeur − 40).
+- **Barre de titre maison** (fenêtres sans cadre : `decorations: false` dans tauri.conf.json et `open_window`) : la bande des
+  onglets sert de barre de titre (main.js, après `els.newTab.onclick`). `mousedown` sur son vide (`.drag-space`, hors `.tab`, boutons,
+  champs) = `startDragging()` (déplacement natif, ancrage Aero conservé), `ev.detail === 2` = `toggleMaximize()`. Le logo se déplace
+  aussi au-delà de 4 px (`brandDragged` bloque alors son menu, écouteur `click` en capture). Boutons `#winctl` (Réduire / Agrandir /
+  Fermer, glyphes Segoe Fluent Icons, icône « Niveau inférieur » mise à jour par `onResized`). Permissions dans
+  `capabilities/default.json` (`allow-start-dragging`, `-minimize`, `-toggle-maximize`, `-internal-toggle-maximize`, `-close`).
+  Redimensionnement par les bords et ombre fournis par Tauri. Pas de menu d'ancrage au survol du bouton Agrandir (limite connue).
 - **Réseau** : liste via `Get-NetAdapter -Physical` (PowerShell, sans admin) ; bascule via PowerShell **élevé**
   (`ShellExecuteW runas`) avec cibles `only:<nom>`, `enable:<nom>`, `disable:<nom>`, `all`. Détection des
   branchements : `GetIfTable2` toutes les 2 s → évènement `network-changed`.
@@ -231,6 +239,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.3.2 | Fin des blocages (« affichage figé », Windows + E sans fenêtre) : opérations lourdes hors des fils de l'exécuteur ; secours Ctrl+Maj+F5 / F12, section « Dépannage » du menu du logo, alerte quand un dossier traîne |
 | 1.3.3 | Zoom et vue mémorisés par dossier ; Alt + molette = historique précédent / suivant ; interface affinée, barre latérale adaptée aux fenêtres étroites, rendu du zoom et du redimensionnement optimisé |
 | 1.3.4 | Visionneuse : clic sur le fond pour fermer ; clics sur le média, zoom, glissers et contrôles conservés |
+| 1.3.5 | Fenêtre sans barre Windows : la bande des onglets déplace la fenêtre (double-clic = agrandir), logo déplaçable, boutons Réduire / Agrandir / Fermer intégrés |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
