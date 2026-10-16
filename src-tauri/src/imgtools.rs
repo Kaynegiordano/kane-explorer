@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use image::ImageFormat;
 
@@ -152,9 +153,198 @@ pub fn clipboard_image(path: &Path) -> Result<(Vec<u8>, Vec<u8>), String> {
     Ok((png, dib))
 }
 
+/* ---------------- Images similaires (empreinte visuelle) ---------------- */
+
+/// Formats lus pour la recherche d'images similaires.
+const SIMILAR_EXT: [&str; 6] = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
+/// Écart maximal (sur 64 bits) entre deux empreintes pour parler d'images « similaires ».
+const SIMILAR_MAX_DISTANCE: u32 = 5;
+const SIMILAR_MAX_FILES: usize = 8000;
+
+#[derive(serde::Serialize, Clone)]
+pub struct SimImage {
+    pub path: String,
+    pub size: u64,
+    pub modified: u64,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Empreinte « dHash » : l'image réduite à 9 × 8 en gris, chaque bit dit si un pixel est plus clair que son voisin de droite.
+/// Insensible au redimensionnement, à la compression et aux petites retouches ; deux compositions différentes donnent des empreintes éloignées.
+fn dhash(img: &image::DynamicImage) -> u64 {
+    let small = img.thumbnail(64, 64).grayscale().resize_exact(9, 8, image::imageops::FilterType::Triangle).to_luma8();
+    let mut h = 0u64;
+    for y in 0..8 {
+        for x in 0..8 {
+            h = (h << 1) | (small.get_pixel(x, y).0[0] > small.get_pixel(x + 1, y).0[0]) as u64;
+        }
+    }
+    h
+}
+
+/// Empreinte et dimensions réelles. La miniature déjà calculée par Windows suffit à l'empreinte
+/// (évite de décoder un PNG de 12 Mo) ; sinon l'image est lue en entier.
+fn image_hash(p: &Path) -> Option<(u64, u32, u32)> {
+    let (w, h) = image::image_dimensions(p).ok()?;
+    #[cfg(windows)]
+    if let Ok(png) = crate::win::thumbnail_png(&p.to_string_lossy(), 128, true, true) {
+        if let Ok(t) = image::load_from_memory(&png) {
+            // Une miniature de forme différente (bandes ajoutées) fausserait l'empreinte : on la vérifie
+            let (tr, r) = (t.width() as f64 / t.height().max(1) as f64, w as f64 / h.max(1) as f64);
+            if (tr - r).abs() / r.max(tr) < 0.05 {
+                return Some((dhash(&t), w, h));
+            }
+        }
+    }
+    let img = image::open(p).ok()?;
+    Some((dhash(&img), w, h))
+}
+
+fn collect_images(dir: &Path, depth: u32, out: &mut Vec<(PathBuf, u64, u64)>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        if out.len() >= SIMILAR_MAX_FILES || crate::extras::CANCEL.load(std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        let Ok(m) = e.metadata() else { continue };
+        let p = e.path();
+        if m.is_dir() {
+            if depth > 0 {
+                collect_images(&p, depth - 1, out);
+            }
+            continue;
+        }
+        let ext = p.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).unwrap_or_default();
+        if SIMILAR_EXT.contains(&ext.as_str()) && m.len() > 0 && !crate::extras::cloud_only(&m) {
+            let modified = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
+            out.push((p, m.len(), modified));
+        }
+    }
+}
+
+/// Groupes d'images qui se ressemblent (variantes, ré-enregistrements, agrandissements), la meilleure en premier
+/// (plus grande définition, puis plus gros fichier). `progress(fait, total)` est appelé pendant l'analyse.
+pub fn similar_images(dir: &Path, recursive: bool, progress: &(dyn Fn(usize, usize) + Sync)) -> Vec<Vec<SimImage>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    crate::extras::CANCEL.store(false, Ordering::Relaxed);
+    let mut files = Vec::new();
+    collect_images(dir, if recursive { 4 } else { 0 }, &mut files);
+    let total = files.len();
+    let done = AtomicUsize::new(0);
+    let mut hashes: Vec<Option<(u64, u32, u32)>> = vec![None; total];
+    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(12);
+    let chunk = total.div_ceil(workers).max(1);
+    std::thread::scope(|s| {
+        for (files, slots) in files.chunks(chunk).zip(hashes.chunks_mut(chunk)) {
+            let done = &done;
+            s.spawn(move || {
+                for ((p, _, _), slot) in files.iter().zip(slots.iter_mut()) {
+                    if crate::extras::CANCEL.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if let Some(h) = image_hash(p) {
+                        *slot = Some(h);
+                    }
+                    let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n % 8 == 0 || n == total {
+                        progress(n, total);
+                    }
+                }
+            });
+        }
+    });
+    if crate::extras::CANCEL.load(Ordering::Relaxed) {
+        return vec![];
+    }
+
+    // Regroupement autour d'un « chef » : les images sont parcourues de la meilleure (plus grande définition) à la moins bonne ;
+    // une image libre devient chef et prend les images libres assez proches d'ELLE (pas de chaîne A ~ B ~ C où A et C diffèrent).
+    let mut order: Vec<usize> = (0..total).filter(|&i| hashes[i].is_some()).collect();
+    order.sort_by_key(|&i| {
+        let (_, w, h) = hashes[i].unwrap();
+        std::cmp::Reverse((w as u64 * h as u64, files[i].1))
+    });
+    let mut taken = vec![false; total];
+    let mut groups: Vec<Vec<SimImage>> = Vec::new();
+    let item = |i: usize| {
+        let (_, w, h) = hashes[i].unwrap();
+        let (p, size, modified) = &files[i];
+        SimImage { path: p.to_string_lossy().into_owned(), size: *size, modified: *modified, width: w, height: h }
+    };
+    for (k, &lead) in order.iter().enumerate() {
+        if taken[lead] {
+            continue;
+        }
+        let (hl, wl, hgl) = hashes[lead].unwrap();
+        let rl = wl as f64 / hgl.max(1) as f64;
+        let mut g = vec![item(lead)];
+        for &j in &order[k + 1..] {
+            if taken[j] {
+                continue;
+            }
+            let (hj, wj, hgj) = hashes[j].unwrap();
+            let rj = wj as f64 / hgj.max(1) as f64;
+            if (hl ^ hj).count_ones() <= SIMILAR_MAX_DISTANCE && (rl - rj).abs() / rl.max(rj) <= 0.03 {
+                taken[j] = true;
+                g.push(item(j));
+            }
+        }
+        if g.len() > 1 {
+            taken[lead] = true;
+            groups.push(g);
+        }
+    }
+    let mut out = groups;
+    out.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a[0].path.cmp(&b[0].path)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn mesure_distances() {
+        let dir = std::env::var("SIM_DIR").unwrap();
+        let mut files = Vec::new();
+        collect_images(Path::new(&dir), 4, &mut files);
+        let hs: Vec<_> = files.iter().filter_map(|(p, _, _)| image::open(p).ok().map(|i| (p.file_name().unwrap().to_string_lossy().into_owned(), dhash(&i), dhash16(&i)))).collect();
+        for i in 0..hs.len() {
+            for j in i + 1..hs.len() {
+                let d64 = (hs[i].1 ^ hs[j].1).count_ones();
+                let d256: u32 = hs[i].2.iter().zip(&hs[j].2).map(|(a, b)| (a ^ b).count_ones()).sum();
+                if d64 <= 14 {
+                    println!("{:>3} {:>4}  {} ~ {}", d64, d256, hs[i].0, hs[j].0);
+                }
+            }
+        }
+    }
+
+    fn dhash16(img: &image::DynamicImage) -> [u64; 4] {
+        let s = img.thumbnail(128, 128).grayscale().resize_exact(17, 16, image::imageops::FilterType::Triangle).to_luma8();
+        let mut h = [0u64; 4];
+        for y in 0..16u32 {
+            for x in 0..16u32 {
+                let bit = (y * 16 + x) as usize;
+                if s.get_pixel(x, y).0[0] > s.get_pixel(x + 1, y).0[0] {
+                    h[bit / 64] |= 1 << (bit % 64);
+                }
+            }
+        }
+        h
+    }
+
+    #[test]
+    fn empreintes_proches_pour_une_meme_image() {
+        let base = image::RgbImage::from_fn(300, 200, |x, y| image::Rgb([(x * 255 / 300) as u8, (y * 255 / 200) as u8, ((x + y) % 256) as u8]));
+        let a = image::DynamicImage::ImageRgb8(base.clone());
+        let b = a.resize_exact(600, 400, image::imageops::FilterType::Lanczos3); // agrandie
+        let c = image::DynamicImage::ImageRgb8(image::imageops::flip_horizontal(&base)); // autre composition
+        assert!((dhash(&a) ^ dhash(&b)).count_ones() <= SIMILAR_MAX_DISTANCE);
+        assert!((dhash(&a) ^ dhash(&c)).count_ones() > SIMILAR_MAX_DISTANCE);
+    }
 
     fn png_chunk(kind: &[u8], data: &[u8]) -> Vec<u8> {
         let mut c = (data.len() as u32).to_be_bytes().to_vec();

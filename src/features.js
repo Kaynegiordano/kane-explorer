@@ -117,6 +117,9 @@ function afterLoad(t, isRefresh = false) {
   if (t === tab) publishWindow();
   if (!isRefresh) { t.info = null; t.git = null; }
   t.prompts = null;
+  t.promptsRaw = null;
+  t.aiFacets = null;
+  t.previews = undefined; // aperçus des sous-dossiers (grille), lus à la demande : studio.js
   if (t.path === HOME || t.virtual) { t.sub = null; if (t.virtual) { t.info = null; t.git = null; } return; }
   const path = t.path;
   const still = () => t.path === path;
@@ -140,6 +143,8 @@ function afterLoad(t, isRefresh = false) {
     }
   }).catch(() => {});
   if (parseFilter(t.filter).mode === 'prompt') loadPrompts(t);
+  else if (wantsAiScan(t)) loadPrompts(t, true);
+  if (t === tab) renderAiBar();
 }
 
 function renderStatusExtra() {
@@ -198,10 +203,11 @@ function weVisual(e) {
   return `<img class="thumb" src="${thumbUrl(p, 128)}" data-anim="${convertFileSrc(we.preview)}" decoding="async" draggable="false" alt="">`;
 }
 
-function loadPrompts(t) {
+/** `silent` : lecture de fond pour la barre des filtres IA (pas de message, pas de nouvel affichage de la liste). */
+function loadPrompts(t, silent = false) {
   if (t.promptsLoading || t.prompts || t.path === HOME) return;
   t.promptsLoading = true;
-  els.count.textContent = 'Lecture des prompts…';
+  if (!silent) els.count.textContent = 'Lecture des prompts…';
   const path = t.path;
   invoke('scan_prompts', { dir: path }).then((obj) => {
     t.promptsLoading = false;
@@ -209,7 +215,11 @@ function loadPrompts(t) {
     const m = {};
     for (const [k, v] of Object.entries(obj)) m[k] = v.toLowerCase();
     t.prompts = m;
-    if (t === tab) { render(); renderWindow(true); }
+    t.promptsRaw = obj;
+    t.aiFacets = null;
+    if (t !== tab) return;
+    if (!silent || parseFilter(t.filter).mode === 'prompt') { render(); renderWindow(true); }
+    renderAiBar();
   }).catch(() => { t.promptsLoading = false; });
 }
 
@@ -535,6 +545,9 @@ async function stripMeta(list) {
 function imageAiMenu(sel, one) {
   const items = [];
   if (one) items.push({ label: 'Copier l’image (à coller dans Discord, Forge…)', run: () => copyImage(one) });
+  if (sel.length === 2) items.push({ label: 'Avant / après (curseur)', run: () => openSlider(sel[0], sel[1]) });
+  const orig = one && findOriginal(one, tab.items);
+  if (orig) items.push({ label: `Avant / après avec « ${esc(orig.name)} »`, run: () => openSlider(orig, one) });
   if (one && AI_EXT.has(one.ext)) {
     items.push(
       { label: 'Copier le prompt', run: () => copyAiField(one, 'prompt') },
@@ -577,6 +590,7 @@ function featureItemMenu(sel, one) {
     items.push(
       { label: 'Analyser l’espace', run: () => openDiskUsage(one.path) },
       { label: 'Rechercher les doublons', run: () => openDuplicates(one.path) },
+      { label: 'Rechercher les images similaires', run: () => openSimilar(one.path) },
     );
   }
   if (sel.some((e) => inOneDrive(e.path))) {
@@ -600,6 +614,7 @@ function featureBlankMenu() {
     { label: 'Visionneuse du dossier', kbd: 'Espace', disabled: !tab.items.some(isViewable), run: () => openViewer(tab.items.filter(isViewable), 0) },
     { label: 'Analyser l’espace de ce dossier', run: () => openDiskUsage(p) },
     { label: 'Rechercher les doublons ici', run: () => openDuplicates(p) },
+    { label: 'Rechercher les images similaires ici', run: () => openSimilar(p) },
     { label: 'Ouvrir dans VS Code', disabled: !kTools.code, run: () => openCode(p) },
     ...toolBlankMenu(),
   ];
@@ -723,6 +738,7 @@ function showViewerShell(mode) {
 
 function closeViewer() {
   if (viewerEl.hidden) return;
+  if (vw?.mode === 'slider' && vw.back) { openViewer(vw.back.list, vw.back.i); return; }
   const last = vw?.mode === 'single' ? vw.list[vw.i] : null;
   clearInterval(vw?.show);
   if (viewerEl.classList.contains('fs')) viewerFullscreen(false);
@@ -751,6 +767,7 @@ function openViewer(list, i) {
     <div class="vw-top">
       <span class="vw-title"></span><span class="vw-dims"></span><span class="vw-count"></span><span class="grow"></span>
       <button data-v="upscale" class="accent" title="Agrandir par IA, sans perte de netteté (U)">Agrandir IA</button>
+      <button data-v="beforeafter" title="Comparer avec l’original, curseur avant / après (A)" hidden>Avant / après</button>
       <button data-v="copy" title="Copier l’image, à coller dans Discord, Forge… (Ctrl+C) · Ctrl+Maj+C : copier le prompt">Copier</button>
       <button data-v="open" title="Ouvrir avec l’application par défaut (Entrée)">Ouvrir</button>
       <button data-v="openwith" title="Ouvrir avec un autre logiciel (O)">Ouvrir avec…</button>
@@ -812,6 +829,7 @@ function zoomApply() {
 /** Multiplie le zoom par `factor` en gardant fixe le point (cx, cy) de l'écran (le centre si absent). */
 function zoomAt(factor, cx, cy, box) {
   if (vw?.mode === 'compare') return cmpZoomAt(factor, cx, cy, box);
+  if (vw?.mode === 'slider') return sliderZoomAt(factor, cx, cy);
   const img = zoomImg();
   if (!img) return;
   const r = viewerEl.querySelector('.vw-stage').getBoundingClientRect();
@@ -827,6 +845,7 @@ function zoomAt(factor, cx, cy, box) {
 }
 
 function zoomReset() {
+  if (vw?.mode === 'slider') { vw.z = { s: 1, x: 0, y: 0 }; sliderApply(); return; }
   if (vw?.mode === 'compare') { vw.cz = { s: 1, nx: 0, ny: 0 }; cmpApply(); return; }
   if (!vw?.z) return;
   vw.z.s = 1; vw.z.x = 0; vw.z.y = 0;
@@ -985,6 +1004,7 @@ function showViewerItem() {
   }
   viewerEl.querySelector('.vw-zoom').hidden = isVideo;
   viewerEl.querySelector('[data-v="upscale"]').hidden = !UPSCALE_EXT.has(e.ext);
+  viewerEl.querySelector('[data-v="beforeafter"]').hidden = !findOriginal(e, [...vw.list, ...tab.items]);
   zoomApply();
   renderStrip();
   viewerEl.querySelector('.vw-title').innerHTML = `${tagDot(e)}${esc(e.name)} ${ratingBadge(e)}`;
@@ -1153,6 +1173,7 @@ function openCompare(list) {
     <div class="vw-top"><span class="vw-title">Comparaison · ${list.length} images</span>
       <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Zoom commun à toutes les images"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zfit" title="Ajuster (F)">Ajuster</button></div>
       <span class="grow"></span>
+      ${list.length === 2 ? '<button data-v="slider" title="Superposer les deux images avec un curseur">Avant / après</button>' : ''}
       <button data-v="close" title="Fermer (Échap)">✕</button></div>
     <div class="vw-compare" style="grid-template-columns:repeat(${list.length},1fr)">
       ${list.map((e, k) => `<figure data-k="${k}"><div class="cmp-img"><img src="${assetOrThumb(e, 1024)}" alt=""></div>
@@ -1194,6 +1215,9 @@ viewerEl.addEventListener('click', async (ev) => {
   switch (b.dataset.v) {
     case 'close': closeViewer(); break;
     case 'goto': vw.i = k; showViewerItem(); break;
+    case 'swap': sliderSwap(); break;
+    case 'slider': openSlider(vw.list[0], vw.list[1]); break;
+    case 'beforeafter': { const e = vw.list[vw.i]; const o = findOriginal(e, [...vw.list, ...tab.items]); if (o) openSlider(o, e, { list: vw.list, i: vw.i }); break; }
     case 'upscale': openUpscale([vw.list[vw.i]], viewerInsert); break;
     case 'copy': copyImage(vw.list[vw.i]); break;
     case 'openwith': openWith(vw.list[vw.i].path); break;
@@ -1239,6 +1263,12 @@ viewerEl.addEventListener('wheel', (ev) => {
     cmpZoomAt(Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 33 : 1) * (ev.ctrlKey ? 0.01 : 0.0018)), ev.clientX, ev.clientY, box);
     return;
   }
+  if (vw?.mode === 'slider') {
+    if (!ev.deltaY) return;
+    ev.preventDefault();
+    sliderZoomAt(Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 33 : 1) * (ev.ctrlKey ? 0.01 : 0.0018)), ev.clientX, ev.clientY);
+    return;
+  }
   if (!vw || vw.mode !== 'single' || ev.target.closest('.vw-info, video')) return;
   ev.preventDefault();
   const dy = (ev.deltaY || ev.deltaX) * (ev.deltaMode === 1 ? 33 : 1);
@@ -1271,6 +1301,13 @@ document.addEventListener('keydown', (ev) => {
     if (ev.shiftKey) copyAiField(e, 'prompt'); else copyImage(e);
     return;
   }
+  if (vw.mode === 'slider' && !ev.ctrlKey && !ev.metaKey) {
+    if (ev.key === '+' || ev.key === '=') zoomAt(1.5);
+    else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.5);
+    else if (ev.key.toLowerCase() === 'f') zoomReset();
+    else if (ev.key.toLowerCase() === 's') sliderSwap();
+    return;
+  }
   if (vw.mode === 'compare' && !ev.ctrlKey && !ev.metaKey) {
     if (ev.key === '+' || ev.key === '=') zoomAt(1.5);
     else if (ev.key === '-' || ev.key === '_') zoomAt(1 / 1.5);
@@ -1298,6 +1335,7 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key.toLowerCase() === 't') viewerEl.querySelector('[data-v="strip"]').click();
   else if (ev.key.toLowerCase() === 'p') toggleSlideshow();
   else if (ev.key.toLowerCase() === 'o') openWith(vw.list[vw.i].path);
+  else if (ev.key.toLowerCase() === 'a') viewerEl.querySelector('[data-v="beforeafter"]:not([hidden])')?.click();
   else if (ev.key.toLowerCase() === 'i') { vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); }
   else if (/^[1-6]$/.test(ev.key)) viewerTag(TAG_NAMES[+ev.key - 1], false);
   else if (ev.key === '0') viewerTag(null, false);
@@ -1540,7 +1578,7 @@ function adapterKind(a) {
   if (a.kind === 'wifi') return 'Wi-Fi';
   return /usb/i.test(a.description) ? 'Ethernet USB' : 'Ethernet';
 }
-const ADAPTER_STATUS = { Up: 'connectée', Disconnected: 'non connectée', Disabled: 'désactivée' };
+const ADAPTER_STATUS = { Up: 'connectée', Disconnected: 'non connectée', Disabled: 'désactivée', 'Not Present': 'absente (débranchée)' };
 
 function renderNetwork() {
   const btn = $('net-btn');
@@ -1553,12 +1591,16 @@ function renderNetwork() {
   btn.title = netAdapters.map((a) => `${a.name} — ${a.description} (${adapterKind(a)}) : ${ADAPTER_STATUS[a.status] || a.status}`).join('\n');
 }
 
-let netRetry = 0;
-async function loadNetwork() {
-  const list = await invoke('network_adapters').catch(() => null);
-  if (list && (list.length || !netAdapters.length)) netAdapters = list;
-  if (!list || !list.length) { clearTimeout(netRetry); netRetry = setTimeout(loadNetwork, 4000); }
-  renderNetwork();
+// Get-NetAdapter passe par PowerShell (~0,7 s, ~60 Mo) : lu seulement quand le menu du logo va servir, gardé 30 s.
+let netLoadedAt = 0, netLoading = null;
+function loadNetwork(force = false) {
+  if (netLoading) return netLoading;
+  if (!force && Date.now() - netLoadedAt < 30000) return Promise.resolve();
+  netLoading = invoke('network_adapters').then((list) => {
+    if (list && (list.length || !netAdapters.length)) netAdapters = list;
+    netLoadedAt = Date.now();
+  }).catch(() => {}).finally(() => { netLoading = null; renderNetwork(); });
+  return netLoading;
 }
 
 async function switchNetwork(target) {
@@ -1637,9 +1679,11 @@ setInterval(() => {
 
 /* L'astuce : un clic sur « Kane Explorer » (logo, en haut de la barre latérale) ouvre un menu caché :
    le choix de la carte réseau, sans quitter le dossier ouvert, et quelques outils peu conventionnels. */
-document.querySelector('.sidebar .brand').addEventListener('click', () => {
+document.querySelector('.sidebar .brand').addEventListener('mouseenter', () => loadNetwork()); // lecture anticipée au survol
+document.querySelector('.sidebar .brand').addEventListener('click', async () => {
   const r = document.querySelector('.sidebar .brand').getBoundingClientRect();
-  loadNetwork(); // état à jour pour la prochaine ouverture
+  if (!netLoadedAt) await loadNetwork(); // premier menu : attendre la liste des cartes
+  else loadNetwork(); // état à jour pour la prochaine ouverture
   showMenu(r.left + 10, r.bottom + 2, [
     { label: '<b>Dépannage</b>', disabled: true },
     { label: 'Débloquer l’affichage', kbd: 'Ctrl+Maj+F5', run: unstick },
@@ -1657,7 +1701,7 @@ document.querySelector('.sidebar .brand').addEventListener('click', () => {
 });
 
 // Carte branchée / débranchée / activée : mise à jour automatique (signal envoyé par Kane)
-window.__TAURI__.event.listen('network-changed', () => { setTimeout(loadNetwork, 800); });
+window.__TAURI__.event.listen('network-changed', () => { if (netLoadedAt) setTimeout(() => loadNetwork(true), 800); });
 // Lecteur branché ou retiré : barre latérale et accueil se mettent à jour tout seuls
 window.__TAURI__.event.listen('drives-changed', async () => {
   await loadSidebar();
@@ -1896,12 +1940,9 @@ function featuresInit() {
       setInterval(() => { if (prefs.updateMode !== 'manual') checkForUpdate(true); }, 6 * 3600 * 1000);
     }
   }
-  let lastNet = 0;
-  window.addEventListener('focus', () => { if (Date.now() - lastNet > 15000) { lastNet = Date.now(); loadNetwork(); } });
   renderSidebar();
   invoke('tools').then((t) => { kTools = t; if (tab.path !== HOME) afterLoad(tab, true); }).catch(() => {});
   invoke('extra_places').then((p) => { shared.extra = p; renderSidebar(); renderChrome(); }).catch(() => {});
-  loadNetwork();
   publishWindow();
   setInterval(publishWindow, 5000);
 }

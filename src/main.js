@@ -711,7 +711,7 @@ function itemHtml(e, i) {
   if (e.hidden) c += ' hidden-file';
   if (e.is_dir) c += ' dir';
   if (prefs.view === 'grid') {
-    const visual = weVisual(e) || (isApp(e)
+    const visual = weVisual(e) || (e.is_dir && folderVisual(e)) || (isApp(e)
       ? `<img class="thumb icon" src="${thumbUrl(e, Math.max(64, TILE_ICON), 'i')}" decoding="async" draggable="false" alt="">`
       : wantsThumb(e)
         ? `<img class="thumb" src="${thumbUrl(e, Math.max(128, TILE_ICON * 2))}" decoding="async" draggable="false" alt="">`
@@ -803,7 +803,9 @@ function renderHome() {
         `<div class="sub">${fmtSize(d.free)} libres sur ${fmtSize(d.total)}</div>` : '') +
       `</div></button>`;
   }).join('');
-  els.content.innerHTML = `<div class="home">${homePinnedHtml()}<h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
+  const recents = `<div class="home-recents-wrap"><h2>Récents</h2><div class="recents" id="home-recents"></div></div>`;
+  els.content.innerHTML = `<div class="home">${homePinnedHtml()}${recents}<h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
+  loadRecents();
 }
 
 function segments(path) {
@@ -829,6 +831,7 @@ function renderChrome() {
   els.crumbs.scrollLeft = els.crumbs.scrollWidth;
 
   markActive();
+  if (typeof renderAiBar === 'function') renderAiBar(); // filtres IA (studio.js)
   if (typeof syncSaveBtn === 'function') syncSaveBtn(); // bouton « Enregistrer la recherche » (search.js)
 
   els.back.disabled = tab.hIndex <= 0;

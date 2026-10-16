@@ -1004,6 +1004,135 @@ async fn strip_metadata(paths: Vec<String>) -> Result<(Vec<String>, Vec<String>)
     .await
 }
 
+/// Images qui se ressemblent dans un dossier (avancement : évènement `similar-progress` = [fait, total]).
+#[tauri::command]
+async fn similar_images(window: WebviewWindow, path: String, recursive: bool) -> Result<Vec<Vec<imgtools::SimImage>>, String> {
+    blocking(move || {
+        let send = |done: usize, total: usize| {
+            let _ = window.emit_to(window.label(), "similar-progress", (done, total));
+        };
+        imgtools::similar_images(Path::new(&path), recursive, &send)
+    })
+    .await
+}
+
+const PREVIEW_EXT: [&str; 12] = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "avif", "tif", "tiff", "mp4", "mkv"];
+/// Entrées lues au plus par sous-dossier pour trouver ses aperçus (un dossier de 100 000 fichiers reste instantané).
+const PREVIEW_SCAN: usize = 300;
+
+fn file_entry(p: &Path, meta: &fs::Metadata) -> Entry {
+    let attrs = attributes(meta);
+    Entry {
+        name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        path: p.to_string_lossy().into_owned(),
+        is_dir: false,
+        size: meta.len(),
+        modified: millis(meta.modified()),
+        created: millis(meta.created()),
+        hidden: is_hidden(meta),
+        protected: attrs & (ATTR_HIDDEN | ATTR_SYSTEM) == (ATTR_HIDDEN | ATTR_SYSTEM),
+        attrs,
+        display: None,
+    }
+}
+
+/// Jusqu'à 4 images (ou vidéos) de chaque sous-dossier : les dossiers de la grille montrent leur contenu.
+#[tauri::command]
+async fn folder_previews(dir: String) -> Result<Vec<(String, Vec<Entry>)>, String> {
+    blocking(move || {
+        let subdirs: Vec<PathBuf> = fs::read_dir(&dir)
+            .map(|rd| rd.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).map(|e| e.path()).collect())
+            .unwrap_or_default();
+        let scan = |d: &PathBuf| -> Option<(String, Vec<Entry>)> {
+            let mut found = Vec::new();
+            for e in fs::read_dir(d).ok()?.flatten().take(PREVIEW_SCAN) {
+                let p = e.path();
+                let ext = p.extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase()).unwrap_or_default();
+                if !PREVIEW_EXT.contains(&ext.as_str()) {
+                    continue;
+                }
+                let Ok(m) = e.metadata() else { continue };
+                if m.is_file() && !is_hidden(&m) {
+                    found.push(file_entry(&p, &m));
+                    if found.len() == 4 {
+                        break;
+                    }
+                }
+            }
+            (!found.is_empty()).then(|| (d.to_string_lossy().into_owned(), found))
+        };
+        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8);
+        let chunk = subdirs.len().div_ceil(workers).max(1);
+        std::thread::scope(|s| {
+            let jobs: Vec<_> = subdirs.chunks(chunk).map(|part| s.spawn(move || part.iter().filter_map(scan).collect::<Vec<_>>())).collect();
+            jobs.into_iter().flat_map(|j| j.join().unwrap_or_default()).collect()
+        })
+    })
+    .await
+}
+
+const RECENT_PER_DIR: usize = 6;
+
+/// Derniers fichiers modifiés dans les dossiers de tous les jours (Bureau, Téléchargements, Images, Forge, OBS…).
+#[tauri::command]
+async fn recent_files(limit: usize) -> Result<Vec<Entry>, String> {
+    blocking(move || {
+        let mut roots: Vec<(PathBuf, u32)> = [dirs::desktop_dir(), dirs::download_dir(), dirs::document_dir(), dirs::picture_dir(), dirs::video_dir(), screenshots_dir()]
+            .into_iter()
+            .flatten()
+            .map(|p| (p, 0))
+            .collect();
+        if let Some(p) = extras::obs_folder() {
+            roots.push((p, 0));
+        }
+        for d in drive_roots() {
+            let p = PathBuf::from(d).join("KaneOS").join("output");
+            if p.is_dir() {
+                roots.push((p, 3)); // output\forge\txt2img-images\<jour>
+            }
+        }
+        fn walk(dir: &Path, depth: u32, out: &mut Vec<Entry>) {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let Ok(m) = e.metadata() else { continue };
+                let p = e.path();
+                if m.is_dir() {
+                    if depth > 0 {
+                        walk(&p, depth - 1, out);
+                    }
+                    continue;
+                }
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                let junk = name == "desktop.ini" || name.ends_with(".lnk") || name.ends_with(".tmp") || name.ends_with(".crdownload")
+                    || name.ends_with(".part") || name.starts_with("~$");
+                if !junk && !is_hidden(&m) {
+                    out.push(file_entry(&p, &m));
+                }
+            }
+        }
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (root, depth) in roots {
+            if seen.insert(root.to_string_lossy().to_lowercase()) {
+                walk(&root, depth, &mut all);
+            }
+        }
+        all.sort_by(|a, b| b.modified.cmp(&a.modified));
+        all.dedup_by(|a, b| a.path.eq_ignore_ascii_case(&b.path));
+        // Pas plus de quelques fichiers par dossier : une séance de génération ne masque pas le reste
+        let mut per_dir: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        all.retain(|e| {
+            let dir = Path::new(&e.path).parent().map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let n = per_dir.entry(dir).or_default();
+            *n += 1;
+            *n <= RECENT_PER_DIR
+        });
+        all.truncate(limit.min(60));
+        all
+    })
+    .await
+}
+
 #[cfg(windows)]
 #[tauri::command]
 async fn clipboard_text(window: WebviewWindow, text: String) -> Result<(), String> {
@@ -1304,6 +1433,9 @@ pub fn run() {
             strip_metadata,
             clipboard_image,
             clipboard_text,
+            similar_images,
+            folder_previews,
+            recent_files,
             open_in_code,
             set_wallpaper,
             media_props,
