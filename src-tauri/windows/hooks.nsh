@@ -33,4 +33,7 @@
   !insertmacro KANE_UNREGISTER_CLASS "Directory"
   !insertmacro KANE_UNREGISTER_CLASS "Drive"
   DeleteRegKey HKCU "${KANE_WIN_E}"
+  ; Kane en arrière-plan : plus de lancement avec Windows, réglages du processus sans fenêtre effacés
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "KaneExplorer"
+  DeleteRegKey HKCU "Software\Kane Explorer"
 !macroend

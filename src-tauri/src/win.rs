@@ -617,6 +617,69 @@ fn url_to_path(url: &str) -> Option<String> {
     }
 }
 
+/// Prévient (sans aucune boucle d'attente : zéro CPU au repos) quand une fenêtre de l'Explorateur Windows apparaît :
+/// crochet d'évènement `EVENT_OBJECT_SHOW` sur un fil dédié. Le fil ne se réveille que pour une vraie fenêtre « CabinetWClass ».
+pub fn watch_explorer_windows(tx: std::sync::mpsc::Sender<isize>) {
+    use std::sync::{Mutex, OnceLock};
+    use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+    static TX: OnceLock<Mutex<std::sync::mpsc::Sender<isize>>> = OnceLock::new();
+    unsafe extern "system" fn on_show(_: HWINEVENTHOOK, event: u32, hwnd: HWND, id_object: i32, id_child: i32, _: u32, _: u32) {
+        if event != 0x8002 || id_object != 0 || id_child != 0 || hwnd.0.is_null() {
+            return; // EVENT_OBJECT_SHOW, objet « fenêtre » seulement
+        }
+        let mut buf = [0u16; 32];
+        let n = GetClassNameW(hwnd, &mut buf) as usize;
+        if String::from_utf16_lossy(&buf[..n]) == "CabinetWClass" {
+            if let Some(tx) = TX.get().and_then(|m| m.lock().ok()) {
+                let _ = tx.send(hwnd.0 as isize);
+            }
+        }
+    }
+    let _ = TX.set(Mutex::new(tx));
+    std::thread::spawn(|| unsafe {
+        // WINEVENT_OUTOFCONTEXT (0) | WINEVENT_SKIPOWNPROCESS (2)
+        let hook = SetWinEventHook(0x8002, 0x8002, None, Some(on_show), 0, 0, 2);
+        if hook.0.is_null() {
+            return;
+        }
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    });
+}
+
+/// Rend à Windows la mémoire que Kane n'utilise pas (processus en arrière-plan sans fenêtre : quelques Mo seulement).
+pub fn trim_memory() {
+    use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        let _ = K32EmptyWorkingSet(GetCurrentProcess());
+    }
+}
+
+/// Mode « efficacité » de Windows (EcoQoS) : le processus tourne sur les cœurs économes, à priorité réduite, tant qu'aucune fenêtre n'est ouverte.
+pub fn eco_mode(on: bool) {
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, ProcessPowerThrottling, SetProcessInformation, PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        PROCESS_POWER_THROTTLING_EXECUTION_SPEED, PROCESS_POWER_THROTTLING_STATE,
+    };
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: if on { PROCESS_POWER_THROTTLING_EXECUTION_SPEED } else { 0 },
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &state as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 /// Dossier affiché par une fenêtre de l'Explorateur et élément mis en évidence (« Afficher dans le dossier »), lus via IShellWindows.
 /// À appeler depuis un fil où COM est initialisé. None : fenêtre pas encore prête ou dossier virtuel.
 pub fn explorer_location(hwnd: isize) -> Option<(String, Option<String>)> {

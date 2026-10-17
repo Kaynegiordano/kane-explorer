@@ -2192,6 +2192,7 @@ function openOptions() {
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
       ${check('peek', 'Grand aperçu quand la souris reste sur une image ou une vidéo')}
       ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
+      <label class="opt"><input type="checkbox" id="opt-background"> Garder Kane prêt en arrière-plan, lancé avec Windows (sans fenêtre, très léger) : l’Explorateur Windows est remplacé même quand Kane est fermé</label>
       ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
@@ -2214,8 +2215,13 @@ function openOptions() {
     renderWindow(true);
     invoke('explorer_guard', { on: prefs.guardExplorer }).catch(() => {});
   };
+  invoke('background_status').then((on) => { const c = $('opt-background'); if (c) c.checked = on; }).catch(() => {});
   modalBox.onchange = (ev) => {
     const el = ev.target;
+    if (el.id === 'opt-background') {
+      invoke('set_background', { on: el.checked }).then(() => toast(el.checked ? 'Kane se lancera avec Windows, sans fenêtre' : 'Kane ne se lancera plus avec Windows')).catch((e) => { el.checked = !el.checked; toast(cleanError(e), 'error'); });
+      return;
+    }
     if (el.type === 'radio') savePref(el.name, el.value);
     else if (el.type === 'checkbox') savePref(el.name, el.checked);
     else if (el.type === 'time') { savePref(el.name, el.value || DEFAULT_OPTIONS[el.name]); savePref('theme', 'schedule'); modalBox.querySelector('input[name=theme][value=schedule]').checked = true; }
@@ -2307,4 +2313,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   await switchTab(active);
   els.content.focus();
   featuresInit();
+  // Ouvert par « Afficher dans le dossier » d'un autre programme : l'élément visé est sélectionné
+  if (window.__KANE_SELECT__) setTimeout(() => selectPath(window.__KANE_SELECT__), 400);
 });

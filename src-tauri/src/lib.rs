@@ -725,18 +725,202 @@ fn watch_dir_sync(app: tauri::AppHandle, label: String, path: Option<String>) ->
 }
 
 fn open_window(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
+    open_window_select(app, path, None)
+}
+
+fn open_window_select(app: &tauri::AppHandle, path: &str, select: Option<&str>) -> Result<(), String> {
+    start_ui_threads(app);
     let label = format!("w{}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
     let start = serde_json::to_string(path).map_err(err)?;
+    let sel = serde_json::to_string(&select).map_err(err)?;
     let w = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
         .title("Kane Explorer")
         .inner_size(1200.0, 760.0)
         .min_inner_size(720.0, 480.0)
         .decorations(false)
-        .initialization_script(format!("window.__KANE_START__ = {start};"))
+        .initialization_script(format!("window.__KANE_START__ = {start}; window.__KANE_SELECT__ = {sel};"))
         .build()
         .map_err(err)?;
+    #[cfg(windows)]
+    win::eco_mode(false);
     let _ = w.set_focus();
     Ok(())
+}
+
+/// Fenêtre principale (celle qui mémorise les onglets) : créée à la demande, au démarrage normal ou au premier appel en mode arrière-plan.
+/// Si elle existe déjà, elle passe devant. `launch` : dossier à ouvrir (lu par la page via `launch_path`).
+fn ensure_main_window(app: &tauri::AppHandle, launch: Option<String>, select: Option<String>) -> Result<(), String> {
+    start_ui_threads(app);
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        #[cfg(windows)]
+        if let Ok(h) = w.hwnd() {
+            win::raise(h, true);
+        }
+        return Ok(());
+    }
+    if let Some(p) = launch.filter(|p| p != HOME_ARG) {
+        if let Ok(mut l) = app.state::<LaunchPath>().0.lock() {
+            *l = Some(p);
+        }
+    }
+    let cfg = app.config().app.windows.first().cloned().ok_or("Fenêtre principale introuvable")?;
+    let sel = serde_json::to_string(&select).map_err(err)?;
+    let w = tauri::WebviewWindowBuilder::from_config(app, &cfg)
+        .map_err(err)?
+        .initialization_script(format!("window.__KANE_SELECT__ = {sel};"))
+        .build()
+        .map_err(err)?;
+    fit_window(&w);
+    #[cfg(windows)]
+    win::eco_mode(false);
+    let _ = w.set_focus();
+    Ok(())
+}
+
+/// Un autre Kane (ou un programme) demande un dossier : nouvelle fenêtre si Kane en a déjà une, sinon la fenêtre principale.
+fn show_path(app: &tauri::AppHandle, path: &str, select: Option<&str>) {
+    if app.get_webview_window("main").is_some() || !app.webview_windows().is_empty() {
+        let _ = open_window_select(app, path, select);
+    } else {
+        let _ = ensure_main_window(app, Some(path.to_string()), select.map(String::from));
+    }
+}
+
+/// Fenêtre par défaut haute (1200×1190) : réduite si l'écran est plus petit, puis recentrée.
+fn fit_window(w: &WebviewWindow) {
+    if let (Ok(Some(m)), Ok(size)) = (w.current_monitor(), w.inner_size()) {
+        let s = m.scale_factor();
+        let (mw, mh) = (m.size().width as f64 / s, m.size().height as f64 / s);
+        let (ww, wh) = (size.width as f64 / s, size.height as f64 / s);
+        let (nw, nh) = (ww.min(mw - 40.0), wh.min(mh - 110.0));
+        if nw < ww || nh < wh {
+            let _ = w.set_size(tauri::LogicalSize::new(nw, nh));
+            let _ = w.center();
+        }
+    }
+}
+
+/// Tout ce qui ne sert que lorsqu'une fenêtre est ouverte (droits d'aperçu des lecteurs, surveillance du réseau et des lecteurs, touches de secours),
+/// démarré une seule fois : le processus en arrière-plan sans fenêtre n'en lance rien.
+fn start_ui_threads(app: &tauri::AppHandle) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // Autorise l'aperçu (images, vidéos, PDF) sur tous les lecteurs
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        {
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                let scope = handle.asset_protocol_scope();
+                for root in drive_letters() {
+                    let _ = scope.allow_directory(&root, true);
+                }
+                let _ = done_tx.send(());
+            });
+        }
+        let _ = done_rx.recv_timeout(std::time::Duration::from_millis(200));
+        #[cfg(windows)]
+        {
+            // Réseau : prévient les fenêtres quand une carte est branchée, débranchée, activée...
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                let mut last = win::network_signature();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    let now = win::network_signature();
+                    if now != last {
+                        last = now;
+                        let _ = handle.emit("network-changed", ());
+                    }
+                }
+            });
+            // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane
+            let handle = app.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                let Some((which, hwnd)) = win::rescue_keys() else { continue };
+                if which == 2 {
+                    restart_now(&handle);
+                }
+                for w in handle.webview_windows().values() {
+                    if w.hwnd().map(|h| h.0 as isize == hwnd).unwrap_or(false) {
+                        let _ = w.reload();
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1500)); // une seule fois par appui
+            });
+            // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+                let mut last = unsafe { GetLogicalDrives() };
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let now = unsafe { GetLogicalDrives() };
+                    if now != last {
+                        last = now;
+                        let scope = handle.asset_protocol_scope();
+                        for root in drive_roots() {
+                            let _ = scope.allow_directory(&root, true);
+                        }
+                        let _ = handle.emit("drives-changed", ());
+                    }
+                }
+            });
+        }
+    });
+}
+
+/* ---------- Kane en arrière-plan (lancé avec Windows, sans fenêtre) ---------- */
+
+static BACKGROUND_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const SETTINGS_KEY: &str = r"Software\Kane Explorer";
+
+#[cfg(windows)]
+fn background_registered() -> bool {
+    win::reg_get(RUN_KEY, Some("KaneExplorer")).is_some()
+}
+#[cfg(not(windows))]
+fn background_registered() -> bool {
+    false
+}
+
+/// Kane est-il lancé avec Windows et gardé en mémoire (sans fenêtre) pour remplacer l'Explorateur à tout moment ?
+#[tauri::command]
+fn background_status() -> bool {
+    background_registered()
+}
+
+/// Active / désactive le lancement avec Windows en arrière-plan (clé « Run » de l'utilisateur, aucun droit administrateur).
+#[tauri::command]
+fn set_background(on: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if on {
+            let exe = std::env::current_exe().map_err(err)?;
+            win::reg_set(RUN_KEY, Some("KaneExplorer"), &format!("\"{}\" --background", exe.to_string_lossy())).map_err(err)?;
+        } else {
+            win::reg_delete_value(RUN_KEY, Some("KaneExplorer"));
+        }
+    }
+    BACKGROUND_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+/// Plus aucune fenêtre : après un court délai, la mémoire est rendue à Windows et le processus passe en mode économe.
+fn schedule_idle(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if app.webview_windows().is_empty() {
+            #[cfg(windows)]
+            {
+                win::eco_mode(true);
+                win::trim_memory();
+            }
+        }
+    });
 }
 
 /// Ouvre un dossier dans une nouvelle fenêtre Kane.
@@ -793,52 +977,58 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 
 /* ---------- Remplacer l'Explorateur Windows (fenêtres ouvertes par d'autres programmes) ---------- */
 
-static GUARD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static GUARD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
-/// Active / désactive le remplacement des fenêtres de l'Explorateur Windows (Options).
+/// Active / désactive le remplacement des fenêtres de l'Explorateur Windows (Options). Mémorisé dans le registre :
+/// le processus en arrière-plan (sans page web) le relit au démarrage.
 #[tauri::command]
 fn explorer_guard(on: bool) {
     GUARD_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(windows)]
+    let _ = win::reg_set(SETTINGS_KEY, Some("GuardExplorer"), if on { "1" } else { "0" });
 }
 
-/// Pendant que Kane tourne : une nouvelle fenêtre de l'Explorateur Windows (« Afficher dans le dossier » d'un navigateur ou d'un jeu,
-/// recherche Windows, lien de dossier…) est fermée aussitôt et son dossier s'ouvre dans Kane, élément sélectionné compris.
-/// Les fenêtres déjà ouvertes au lancement de Kane, la Corbeille et les autres dossiers virtuels ne sont pas touchés.
+/// Une nouvelle fenêtre de l'Explorateur Windows (« Afficher dans le dossier » d'un navigateur ou d'un jeu, recherche Windows, lien de dossier…)
+/// est fermée aussitôt et son dossier s'ouvre dans Kane, élément sélectionné compris. Détection par évènement système : aucune surveillance
+/// en boucle. Les fenêtres déjà ouvertes au lancement de Kane, la Corbeille et les autres dossiers virtuels ne sont pas touchés.
 #[cfg(windows)]
 fn start_explorer_guard(app: tauri::AppHandle) {
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::Ordering;
+    let (tx, rx) = std::sync::mpsc::channel::<isize>();
+    let existing: HashSet<isize> = win::explorer_hwnds().into_iter().collect();
+    win::watch_explorer_windows(tx);
     std::thread::spawn(move || {
         use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
-        let mut ignored: HashSet<isize> = win::explorer_hwnds().into_iter().collect();
-        let mut tries: HashMap<isize, u32> = HashMap::new();
+        let mut pending: HashMap<isize, u32> = HashMap::new();
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            let current = win::explorer_hwnds();
+            // Au repos : le fil dort jusqu'à l'évènement suivant (aucun réveil, aucun CPU)
+            let incoming = if pending.is_empty() { rx.recv().ok() } else { rx.recv_timeout(std::time::Duration::from_millis(120)).ok() };
+            if let Some(h) = incoming {
+                if !existing.contains(&h) && GUARD_ON.load(Ordering::Relaxed) {
+                    pending.entry(h).or_insert(0);
+                }
+            }
             if !GUARD_ON.load(Ordering::Relaxed) {
-                ignored.extend(current); // désactivé : rien ne sera capturé après réactivation parmi les fenêtres déjà là
+                pending.clear();
                 continue;
             }
-            ignored.retain(|h| current.contains(h));
-            for h in current {
-                if ignored.contains(&h) {
-                    continue;
-                }
-                let n = tries.entry(h).or_insert(0);
-                *n += 1;
-                let attempt = *n;
+            let hwnds: Vec<isize> = pending.keys().copied().collect();
+            for h in hwnds {
+                let attempt = {
+                    let n = pending.entry(h).or_insert(0);
+                    *n += 1;
+                    *n
+                };
                 match win::explorer_location(h) {
                     // L'élément à mettre en évidence arrive un peu après la fenêtre : on patiente quelques instants
-                    Some((path, None)) if attempt < 4 => {
-                        let _ = path;
-                    }
+                    Some((_, None)) if attempt < 4 => {}
                     Some((path, select)) => {
+                        pending.remove(&h);
                         win::close_window(h);
-                        ignored.insert(h);
-                        tries.remove(&h);
                         let target = app
                             .webview_windows()
                             .into_iter()
@@ -857,14 +1047,12 @@ fn start_explorer_guard(app: tauri::AppHandle) {
                                 }
                                 let _ = app.emit_to(label.as_str(), "open-here", serde_json::json!({ "path": path, "select": select }));
                             }
-                            None => {
-                                let _ = open_window(&app, &path);
-                            }
+                            // Kane tourne en arrière-plan, sans fenêtre : on en ouvre une
+                            None => show_path(&app, &path, select.as_deref()),
                         }
                     }
-                    None if attempt > 12 => {
-                        ignored.insert(h); // dossier virtuel (Corbeille, Panneau de configuration…) : on laisse faire Windows
-                        tries.remove(&h);
+                    None if attempt > 25 => {
+                        pending.remove(&h); // dossier virtuel (Corbeille, Panneau de configuration…) : on laisse faire Windows
                     }
                     None => {}
                 }
@@ -1552,11 +1740,12 @@ pub fn run() {
         // Une seule instance : un nouveau lancement (Windows + E, dossier ouvert ailleurs)
         // ouvre une nouvelle fenêtre dans le Kane déjà lancé, comme l'Explorateur.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|a| a == "--background") {
+                return; // deuxième lancement « en arrière-plan » (Windows + clé Run) : rien à ouvrir
+            }
             let path = launch_arg(&argv).unwrap_or_else(|| HOME_ARG.into());
             let app = app.clone();
-            std::thread::spawn(move || {
-                let _ = open_window(&app, &path);
-            });
+            std::thread::spawn(move || show_path(&app, &path, None));
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(LaunchPath(Mutex::new(launch_arg(&args).filter(|p| p != HOME_ARG))))
@@ -1567,88 +1756,23 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || responder.respond(thumb_response(&uri)));
         })
         .setup(|app| {
-            // Autorise l'aperçu (images, vidéos, PDF) sur tous les lecteurs
-            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    let scope = handle.asset_protocol_scope();
-                    for root in drive_letters() {
-                        let _ = scope.allow_directory(&root, true);
-                    }
-                    let _ = done_tx.send(());
-                });
-            }
-            let _ = done_rx.recv_timeout(std::time::Duration::from_millis(200));
-            // Réseau : prévient les fenêtres quand une carte est branchée, débranchée, activée...
+            let background = std::env::args().any(|a| a == "--background");
+            BACKGROUND_ON.store(background || background_registered(), std::sync::atomic::Ordering::Relaxed);
             #[cfg(windows)]
             {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    let mut last = win::network_signature();
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_secs(2));
-                        let now = win::network_signature();
-                        if now != last {
-                            last = now;
-                            let _ = handle.emit("network-changed", ());
-                        }
-                    }
-                });
+                let guard = win::reg_get(SETTINGS_KEY, Some("GuardExplorer")).map(|v| v != "0").unwrap_or(true);
+                GUARD_ON.store(guard, std::sync::atomic::Ordering::Relaxed);
+                start_explorer_guard(app.handle().clone());
             }
-            // Fenêtre par défaut haute (1200×1190) : réduite si l'écran est plus petit, puis recentrée
-            if let Some(w) = app.get_webview_window("main") {
-                if let (Ok(Some(m)), Ok(size)) = (w.current_monitor(), w.inner_size()) {
-                    let s = m.scale_factor();
-                    let (mw, mh) = (m.size().width as f64 / s, m.size().height as f64 / s);
-                    let (ww, wh) = (size.width as f64 / s, size.height as f64 / s);
-                    let (nw, nh) = (ww.min(mw - 40.0), wh.min(mh - 110.0));
-                    if nw < ww || nh < wh {
-                        let _ = w.set_size(tauri::LogicalSize::new(nw, nh));
-                        let _ = w.center();
-                    }
+            if background {
+                // Lancé avec Windows : aucune fenêtre, mode économe ; tout le reste démarre à la première fenêtre
+                #[cfg(windows)]
+                {
+                    win::eco_mode(true);
+                    win::trim_memory();
                 }
-            }
-            #[cfg(windows)]
-            start_explorer_guard(app.handle().clone());
-            // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane
-            #[cfg(windows)]
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(std::time::Duration::from_millis(120));
-                    let Some((which, hwnd)) = win::rescue_keys() else { continue };
-                    if which == 2 {
-                        restart_now(&handle);
-                    }
-                    for w in handle.webview_windows().values() {
-                        if w.hwnd().map(|h| h.0 as isize == hwnd).unwrap_or(false) {
-                            let _ = w.reload();
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(1500)); // une seule fois par appui
-                });
-            }
-            // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
-            #[cfg(windows)]
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
-                    let mut last = unsafe { GetLogicalDrives() };
-                    loop {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        let now = unsafe { GetLogicalDrives() };
-                        if now != last {
-                            last = now;
-                            let scope = handle.asset_protocol_scope();
-                            for root in drive_roots() {
-                                let _ = scope.allow_directory(&root, true);
-                            }
-                            let _ = handle.emit("drives-changed", ());
-                        }
-                    }
-                });
+            } else {
+                ensure_main_window(app.handle(), None, None)?;
             }
             Ok(())
         })
@@ -1658,12 +1782,17 @@ pub fn run() {
                 if let Ok(mut map) = window.state::<WatchState>().0.lock() {
                     map.remove(window.label());
                 }
+                if BACKGROUND_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                    schedule_idle(window.app_handle().clone());
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
             list_dir,
             restart_app,
             explorer_guard,
+            background_status,
+            set_background,
             launch_path,
             check_update,
             install_update,
@@ -1740,6 +1869,14 @@ pub fn run() {
             native_preview_alive,
             native_preview_close
         ])
-        .run(tauri::generate_context!())
-        .expect("erreur au lancement de Kane Explorer");
+        .build(tauri::generate_context!())
+        .expect("erreur au lancement de Kane Explorer")
+        .run(|_app, event| {
+            // Mode arrière-plan : fermer la dernière fenêtre ne ferme pas Kane (il reste prêt à remplacer l'Explorateur)
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                if code.is_none() && BACKGROUND_ON.load(std::sync::atomic::Ordering::Relaxed) {
+                    api.prevent_exit();
+                }
+            }
+        });
 }

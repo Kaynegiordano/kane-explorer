@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.7.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.8.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -177,14 +177,26 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   « fichier (2).txt », source vidée supprimée après un déplacement fusionné) via un seul `IFileOperation` en `FOF_NOCONFIRMATION` : plus aucune
   question de remplacement de Windows. Sans conflit : ancien chemin (`shell_file_op`). Restent à Windows : la fenêtre de progression des grosses
   copies, « fichier utilisé », droits administrateur. Appelants : `doPaste`, `dropInto`, `shelfPaste` (tools.js) ; l'annulation (`undo.js`) appelle `paste` sans décisions.
-- **Remplacer l'Explorateur Windows** (1.7.0 ; `start_explorer_guard` dans lib.rs, `win::explorer_hwnds` / `explorer_location` / `close_window`, option
-  `prefs.guardExplorer` → commande `explorer_guard`) : tant que Kane tourne, un fil surveille les fenêtres `CabinetWClass` (toutes les 200 ms) ; une
-  nouvelle fenêtre (ouverte par « Afficher dans le dossier » d'un navigateur ou d'un jeu, la recherche Windows, un lien…) est lue par `IShellWindows`
-  (`LocationURL` + `FocusedItem` pour l'élément à sélectionner, quelques essais), fermée (`WM_CLOSE`), puis la fenêtre Kane au premier plan reçoit
-  l'évènement `open-here {path, select}` (nouvel onglet, élément sélectionné). Ne touchent pas : les fenêtres déjà ouvertes au lancement de Kane, les
-  dossiers virtuels (Corbeille, Panneau de configuration…), tout si l'option est décochée. Kane absent = l'Explorateur Windows s'ouvre encore (seuls
-  Windows + E et les dossiers/lecteurs passent par le registre). Plus aucune entrée de menu vers l'Explorateur Windows (commandes `reveal_path` /
-  `open_in_windows_explorer` conservées côté Rust mais inutilisées).
+- **Remplacer l'Explorateur Windows** (1.7.0, détection par évènement en 1.8.0 ; `start_explorer_guard` dans lib.rs, `win::watch_explorer_windows` /
+  `explorer_hwnds` / `explorer_location` / `close_window`, option `prefs.guardExplorer` → commande `explorer_guard`, réglage aussi écrit dans
+  `HKCU\Software\Kane Explorer\GuardExplorer`) : un crochet `SetWinEventHook(EVENT_OBJECT_SHOW)` sur un fil dédié signale les fenêtres `CabinetWClass`
+  (aucune boucle, zéro CPU au repos) ; le fil de travail dort sur un canal, lit la fenêtre par `IShellWindows` (`LocationURL` + `FocusedItem` pour
+  l'élément à sélectionner, jusqu'à 4 essais), la ferme (`WM_CLOSE`), puis la fenêtre Kane au premier plan reçoit l'évènement `open-here {path, select}`
+  (nouvel onglet, élément sélectionné) ; sans fenêtre Kane, `show_path` en crée une. Ne touchent pas : les fenêtres déjà ouvertes au lancement de Kane,
+  les dossiers virtuels (Corbeille, Panneau de configuration…), tout si l'option est décochée. Plus aucune entrée de menu vers l'Explorateur Windows
+  (commandes `reveal_path` / `open_in_windows_explorer` conservées côté Rust mais inutilisées).
+- **Kane en arrière-plan** (1.8.0 ; Options → « Garder Kane prêt en arrière-plan… », commandes `background_status` / `set_background`, clé
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\KaneExplorer` = `"exe" --background`, retirée par la désinstallation) : lancé avec Windows
+  **sans aucune fenêtre** (la fenêtre `main` de tauri.conf.json a `"create": false`, elle est créée par `ensure_main_window` via
+  `WebviewWindowBuilder::from_config`, au démarrage normal ou à la première demande). Pas de WebView2 tant qu'aucune fenêtre n'existe : **≈ 3,5 Mo**
+  de mémoire de travail, 0 % de CPU. `start_ui_threads` (droits d'aperçu des lecteurs, surveillance réseau / lecteurs, touches de secours) ne démarre
+  qu'à la première fenêtre ; `schedule_idle` (2,5 s après la dernière fenêtre fermée) = `win::eco_mode(true)` (EcoQoS) + `win::trim_memory()`
+  (`EmptyWorkingSet`) ; `RunEvent::ExitRequested` sans code est refusé tant que `BACKGROUND_ON` (clé Run présente ou argument `--background`).
+  `show_path` (instance unique, Windows + E, dossier en argument, capture de l'Explorateur) : nouvelle fenêtre si Kane en a déjà, sinon la fenêtre
+  principale (onglets restaurés ; élément à sélectionner via `window.__KANE_SELECT__`). Mesures (debug) : fenêtre ouverte en 170 ms par Windows + E,
+  en ≈ 790 ms par une capture de l'Explorateur ; après fermeture de la dernière fenêtre : 3,4 Mo, aucun processus WebView2. Banc d'essai :
+  `npx tauri dev --config dev.json -- -- --background` (le port de débogage CDP disparaît quand il n'y a plus de fenêtre : normal) ; fermer une fenêtre par
+  `getCurrentWindow().close()` (jamais `window.close()`).
 - **Instance unique** : `tauri-plugin-single-instance` → un nouveau lancement ouvre une nouvelle fenêtre.
 - **Lecteurs branchés / retirés** (`setup` de lib.rs) : un fil compare `GetLogicalDrives()` toutes les 1,5 s ; au changement il autorise le
   nouveau lecteur dans le protocole d'assets et émet `drives-changed` ; `features.js` recharge la barre latérale, rafraîchit l'accueil et
@@ -272,6 +284,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.5.0 | Visionneuse : Agrandir IA (U, le résultat s'affiche après l'original), Copier l'image (Ctrl+C, pixels + fichier) / le prompt (Ctrl+Maj+C), Ouvrir avec, bande de miniatures (T), fonds sombre / damier / clair (B), diaporama (P), plein écran (F11), glisser l'image vers un autre logiciel, dimensions ; boutons du panneau IA actifs dans la visionneuse. Clic droit « Image et IA › » (copier image / prompt / négatif / paramètres, copie sans prompt ni EXIF). Copies de texte par le presse-papiers Windows. « Images Forge » = C:\KaneOS\output\forge |
 | 1.6.1 | Accueil sans « Récents » ; démarrage plus léger : la barre latérale ne retarde plus l'affichage, lecteurs testés en parallèle (1,5 s au plus), `setup` n'attend plus les lecteurs |
 | 1.7.0 | Conflits de copie / déplacement réglés dans Kane (remplacer, ignorer, garder les deux, fusion de dossiers) au lieu de la boîte de Windows ; les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes sont reprises par Kane (option) ; plus aucun menu vers l'Explorateur Windows |
+| 1.8.0 | Option « Garder Kane prêt en arrière-plan » : lancé avec Windows sans fenêtre (≈ 3,5 Mo, 0 % CPU), l'Explorateur Windows est remplacé même quand Kane est fermé ; détection des fenêtres de l'Explorateur par évènement système (plus de boucle) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -314,7 +327,7 @@ renommage en lot, miniatures, OneDrive (affichage), registre (test sur clé temp
 réseau (couperait la connexion), aperçu d'un vrai .docx (Office absent), installateur interactif et Windows + E,
 installation d'une mise à jour depuis l'application.
 
-Limites connues : « Afficher dans le dossier » des autres logiciels ouvre l'Explorateur si Kane n'est pas lancé (sinon : repris par Kane, 1.7.0) ; Corbeille/Panneau
+Limites connues : « Afficher dans le dossier » des autres logiciels ouvre l'Explorateur si Kane n'est pas lancé et si le mode arrière-plan est désactivé (sinon : repris par Kane, 1.7.0 / 1.8.0) ; Corbeille/Panneau
 de configuration restent à l'Explorateur ; le module d'aperçu des polices Windows n'affiche rien hors Explorateur
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
