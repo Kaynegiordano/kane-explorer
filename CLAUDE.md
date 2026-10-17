@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.6.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.7.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -169,6 +169,22 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   `Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}\shell\opennewwindow\command` (+ `DelegateExecute` vide).
   Écrit par l'installateur (question en fin d'installation) ou par Options → « Explorateur par défaut ».
   La désinstallation rétablit l'Explorateur. « Ouvrir dans l'Explorateur Windows » appelle `explorer.exe` directement.
+- **Copie / déplacement : conflits réglés dans Kane** (1.7.0 ; `paste_conflicts`, `askConflicts`, `pasteWithPrompt` dans main.js, `plan_paste` / `Act` dans
+  lib.rs, `win::file_ops`) : avant de coller, `paste_conflicts` liste les éléments dont le nom existe déjà à la destination (hors copie dans le dossier
+  d'origine : « - Copie » reste géré par Windows) ; la boîte de Kane propose par élément Remplacer / Ignorer / Garder les deux (dossier : Fusionner en
+  remplaçant / en gardant l'existant), et en un clic Tout remplacer, Tout ignorer, Garder les deux, Remplacer si plus récent. `paste` reçoit
+  `decisions` (nom en minuscules → `replace` | `skip` | `both`) et exécute un plan détaillé (`plan_paste` : fusion récursive des dossiers, noms
+  « fichier (2).txt », source vidée supprimée après un déplacement fusionné) via un seul `IFileOperation` en `FOF_NOCONFIRMATION` : plus aucune
+  question de remplacement de Windows. Sans conflit : ancien chemin (`shell_file_op`). Restent à Windows : la fenêtre de progression des grosses
+  copies, « fichier utilisé », droits administrateur. Appelants : `doPaste`, `dropInto`, `shelfPaste` (tools.js) ; l'annulation (`undo.js`) appelle `paste` sans décisions.
+- **Remplacer l'Explorateur Windows** (1.7.0 ; `start_explorer_guard` dans lib.rs, `win::explorer_hwnds` / `explorer_location` / `close_window`, option
+  `prefs.guardExplorer` → commande `explorer_guard`) : tant que Kane tourne, un fil surveille les fenêtres `CabinetWClass` (toutes les 200 ms) ; une
+  nouvelle fenêtre (ouverte par « Afficher dans le dossier » d'un navigateur ou d'un jeu, la recherche Windows, un lien…) est lue par `IShellWindows`
+  (`LocationURL` + `FocusedItem` pour l'élément à sélectionner, quelques essais), fermée (`WM_CLOSE`), puis la fenêtre Kane au premier plan reçoit
+  l'évènement `open-here {path, select}` (nouvel onglet, élément sélectionné). Ne touchent pas : les fenêtres déjà ouvertes au lancement de Kane, les
+  dossiers virtuels (Corbeille, Panneau de configuration…), tout si l'option est décochée. Kane absent = l'Explorateur Windows s'ouvre encore (seuls
+  Windows + E et les dossiers/lecteurs passent par le registre). Plus aucune entrée de menu vers l'Explorateur Windows (commandes `reveal_path` /
+  `open_in_windows_explorer` conservées côté Rust mais inutilisées).
 - **Instance unique** : `tauri-plugin-single-instance` → un nouveau lancement ouvre une nouvelle fenêtre.
 - **Lecteurs branchés / retirés** (`setup` de lib.rs) : un fil compare `GetLogicalDrives()` toutes les 1,5 s ; au changement il autorise le
   nouveau lecteur dans le protocole d'assets et émet `drives-changed` ; `features.js` recharge la barre latérale, rafraîchit l'accueil et
@@ -255,6 +271,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.6.0 | Filtres IA (pastilles modèle / LoRA / sampler / taille / CFG / étapes), images similaires (empreinte visuelle, 0,4 s pour 50 images via le cache de miniatures Windows), avant / après au curseur, dossiers en mosaïque (grille), récents sur l'accueil, cartes réseau lues à la demande (plus de PowerShell au démarrage) |
 | 1.5.0 | Visionneuse : Agrandir IA (U, le résultat s'affiche après l'original), Copier l'image (Ctrl+C, pixels + fichier) / le prompt (Ctrl+Maj+C), Ouvrir avec, bande de miniatures (T), fonds sombre / damier / clair (B), diaporama (P), plein écran (F11), glisser l'image vers un autre logiciel, dimensions ; boutons du panneau IA actifs dans la visionneuse. Clic droit « Image et IA › » (copier image / prompt / négatif / paramètres, copie sans prompt ni EXIF). Copies de texte par le presse-papiers Windows. « Images Forge » = C:\KaneOS\output\forge |
 | 1.6.1 | Accueil sans « Récents » ; démarrage plus léger : la barre latérale ne retarde plus l'affichage, lecteurs testés en parallèle (1,5 s au plus), `setup` n'attend plus les lecteurs |
+| 1.7.0 | Conflits de copie / déplacement réglés dans Kane (remplacer, ignorer, garder les deux, fusion de dossiers) au lieu de la boîte de Windows ; les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes sont reprises par Kane (option) ; plus aucun menu vers l'Explorateur Windows |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -297,7 +314,7 @@ renommage en lot, miniatures, OneDrive (affichage), registre (test sur clé temp
 réseau (couperait la connexion), aperçu d'un vrai .docx (Office absent), installateur interactif et Windows + E,
 installation d'une mise à jour depuis l'application.
 
-Limites connues : « Afficher dans le dossier » des autres logiciels ouvre toujours l'Explorateur ; Corbeille/Panneau
+Limites connues : « Afficher dans le dossier » des autres logiciels ouvre l'Explorateur si Kane n'est pas lancé (sinon : repris par Kane, 1.7.0) ; Corbeille/Panneau
 de configuration restent à l'Explorateur ; le module d'aperçu des polices Windows n'affiche rien hors Explorateur
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 

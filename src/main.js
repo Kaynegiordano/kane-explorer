@@ -60,6 +60,7 @@ const prefs = {
   viewerOnOpen: store.get('viewerOnOpen', true),
   updateMode: store.get('updateMode', 'notify'),      // notify | auto | manual
   iconSize: store.get('iconSize', 64),               // taille des icônes en affichage grille (Ctrl + molette)
+  guardExplorer: store.get('guardExplorer', true),   // les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes s'ouvrent dans Kane
   peek: store.get('peek', true),                      // grand aperçu au survol des images / vidéos
   openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
   theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
@@ -70,7 +71,7 @@ const prefs = {
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'folders', updateMode: 'notify', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, guardExplorer: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
 };
 
 /** Apparence : thème, couleur d'accent, densité des lignes. */
@@ -1050,7 +1051,7 @@ async function doPaste() {
   const slow = setTimeout(() => toast(clip.cut ? 'Déplacement en cours…' : 'Copie en cours…'), 400);
   let created = [];
   try {
-    created = await invoke('paste', { paths: clip.paths, dest: tab.path, cut: clip.cut });
+    created = await pasteWithPrompt(clip.paths, tab.path, clip.cut);
     if (clip.cut) { shared.cut = new Set(); invoke('clipboard_clear').catch(() => {}); }
     tab.selected = new Set(created);
     toast(`${plural(created.length, 'élément')} ${clip.cut ? 'déplacé' : 'collé'}${created.length > 1 ? 's' : ''}`);
@@ -1059,6 +1060,63 @@ async function doPaste() {
   clearTimeout(slow);
   await refresh();
   if (created.length) { const i = tab.items.findIndex((e) => e.path === created[0]); if (i >= 0) { tab.focus = i; scrollToItem(i); paintSelection(); } }
+}
+
+/* ----- Éléments déjà présents à la destination : le choix se fait dans Kane (plus la boîte de dialogue de Windows) ----- */
+
+/** Demande quoi faire pour chaque élément qui existe déjà. Renvoie { nom en minuscules: 'replace' | 'skip' | 'both' } ou null si annulé. */
+function askConflicts(conflicts, move) {
+  return new Promise((resolve) => {
+    const choice = conflicts.map(() => 'both');
+    const info = (size, mod, dir) => (dir ? 'Dossier' : fmtSize(size)) + ' · ' + (mod ? fmtDate(mod) : '—');
+    const radio = (i, v, label, dir) => `<label class="cf-opt"><input type="radio" name="cf${i}" value="${v}" ${choice[i] === v ? 'checked' : ''}><span>${label}</span></label>`;
+    const rows = conflicts.map((c, i) => {
+      const newer = c.is_dir ? '' : c.src_modified > c.dst_modified ? 'src' : c.src_modified < c.dst_modified ? 'dst' : '';
+      const dir = c.is_dir && c.dst_is_dir;
+      return `<div class="cf-row" data-i="${i}">
+        <div class="cf-name">${c.is_dir ? ICON_FOLDER : fileIcon({ name: c.name, ext: extOf(c.name), is_dir: false })}<b title="${esc(c.name)}">${esc(c.name)}</b></div>
+        <div class="cf-info"><span>${move ? 'Déplacé' : 'Copié'} : ${info(c.src_size, c.src_modified, c.is_dir)}${newer === 'src' ? ' <em>plus récent</em>' : ''}</span>
+          <span>Sur place : ${info(c.dst_size, c.dst_modified, c.dst_is_dir)}${newer === 'dst' ? ' <em>plus récent</em>' : ''}</span></div>
+        <div class="cf-opts">${radio(i, 'replace', dir ? 'Fusionner, remplacer' : 'Remplacer')}${radio(i, 'skip', dir ? 'Fusionner, garder l’existant' : 'Ignorer')}${radio(i, 'both', 'Garder les deux')}</div></div>`;
+    }).join('');
+    openWideModal(
+      `<h2>${conflicts.length > 1 ? conflicts.length + ' éléments existent' : 'Un élément existe'} déjà à la destination</h2>
+       <p class="lead">Choisissez ce qu'il faut faire pour ${conflicts.length > 1 ? 'chacun' : 'cet élément'}.</p>
+       ${conflicts.length > 1 ? `<div class="cf-all"><span>Pour tous :</span>
+         <button class="btn" data-all="replace">Tout remplacer</button><button class="btn" data-all="skip">Tout ignorer</button>
+         <button class="btn" data-all="both">Garder les deux</button><button class="btn" data-all="newer">Remplacer si plus récent</button></div>` : ''}
+       <div class="cf-list">${rows}</div>
+       <div class="foot"><span></span><div style="display:flex;gap:8px"><button class="btn" data-r="0">Annuler</button><button class="btn primary" data-r="1">Continuer</button></div></div>`,
+      resolve,
+    );
+    const setAll = (fn) => {
+      conflicts.forEach((c, i) => {
+        choice[i] = fn(c);
+        const el = modalBox.querySelector(`input[name="cf${i}"][value="${choice[i]}"]`);
+        if (el) el.checked = true;
+      });
+    };
+    modalBox.onchange = (ev) => { const m = ev.target.name?.match(/^cf(\d+)$/); if (m) choice[+m[1]] = ev.target.value; };
+    modalBox.onclick = (ev) => {
+      const all = ev.target.closest('[data-all]')?.dataset.all;
+      if (all) { setAll((c) => (all === 'newer' ? (c.src_modified > c.dst_modified ? 'replace' : 'skip') : all)); return; }
+      const r = ev.target.closest('[data-r]')?.dataset.r;
+      if (r === undefined) return;
+      if (r === '0') { closeModal(null); return; }
+      closeModal(Object.fromEntries(conflicts.map((c, i) => [c.name.toLowerCase(), choice[i]])));
+    };
+  });
+}
+
+/** Colle / copie / déplace en réglant d'abord, dans Kane, les éléments déjà présents à la destination. */
+async function pasteWithPrompt(paths, dest, cut) {
+  let decisions = {};
+  const conflicts = await invoke('paste_conflicts', { paths, dest, cut }).catch(() => []);
+  if (conflicts.length) {
+    decisions = await askConflicts(conflicts, cut);
+    if (!decisions) throw new Error('Opération annulée');
+  }
+  return invoke('paste', { paths, dest, cut, decisions });
 }
 
 async function doNewFolder() {
@@ -1517,7 +1575,6 @@ function itemMenu() {
     one?.is_dir && { label: 'Ouvrir dans une nouvelle fenêtre', run: () => winCall('new_window', { path: one.path }) },
     one && !one.is_dir && { label: 'Ouvrir avec…', run: () => openWith(one.path) },
     one?.is_dir && { label: 'Ouvrir dans le Terminal', run: () => openTerminal(one.path) },
-    one && { label: "Afficher dans l'Explorateur Windows", run: () => winCall('reveal_path', { path: one.path }) },
     '-',
     { label: 'Couper', kbd: 'Ctrl+X', run: () => doCopy(true) },
     { label: 'Copier', kbd: 'Ctrl+C', run: () => doCopy(false) },
@@ -1562,7 +1619,6 @@ function blankMenu() {
     { label: 'Actualiser', kbd: 'F5', run: () => refresh(true) },
     '-',
     { label: 'Ouvrir dans le Terminal', run: () => openTerminal() },
-    { label: "Ouvrir dans l'Explorateur Windows", run: () => winCall('open_in_windows_explorer', { path: tab.path }) },
     { label: 'Copier le chemin du dossier', run: () => copyPaths([tab.path]) },
     { label: 'Options des dossiers…', kbd: 'Ctrl+,', run: openOptions },
     ...featureBlankMenu(),
@@ -1811,7 +1867,7 @@ async function dropInto(paths, dest) {
   if (!todo.length) return;
   const slow = setTimeout(() => toast(move ? 'Déplacement en cours…' : 'Copie en cours…'), 400);
   try {
-    const created = await invoke('paste', { paths: todo, dest, cut: move });
+    const created = await pasteWithPrompt(todo, dest, move);
     toast(`${plural(created.length, 'élément')} ${move ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} vers « ${basename(dest) || dest} »`);
     recordPaste(todo, created, move, move ? 'Déplacement' : 'Copie');
     if (samePath(dest, tab.path)) tab.selected = new Set(created);
@@ -2135,6 +2191,7 @@ function openOptions() {
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
       ${check('peek', 'Grand aperçu quand la souris reste sur une image ou une vidéo')}
+      ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
       ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
@@ -2155,6 +2212,7 @@ function openOptions() {
     previewKey = '';
     render();
     renderWindow(true);
+    invoke('explorer_guard', { on: prefs.guardExplorer }).catch(() => {});
   };
   modalBox.onchange = (ev) => {
     const el = ev.target;

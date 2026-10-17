@@ -296,6 +296,44 @@ pub fn file_op(owner: isize, op: Op, paths: &[String], dest: Option<&str>, renam
     }
 }
 
+/// Copie / déplacement d'une liste d'opérations déjà décidées par Kane (source, dossier de destination, nom imposé) :
+/// les conflits ont été réglés dans l'interface de Kane, Windows ne pose plus aucune question de remplacement.
+/// Renvoie `true` si l'opération a été annulée (ou en partie).
+pub fn file_ops(owner: isize, mv: bool, ops: &[(String, String, Option<String>)]) -> Result<bool> {
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+    unsafe {
+        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let result = (|| -> Result<bool> {
+            let fo: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
+            // NOCONFIRMATION : « oui à tout » (remplacer sans demander) ; NOCONFIRMMKDIR : crée les dossiers manquants
+            fo.SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR)?;
+            fo.SetOwnerWindow(HWND(owner as *mut _))?;
+            for (src, dest, name) in ops {
+                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(src.as_str()), None)?;
+                let target: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(dest.as_str()), None)?;
+                let new_name = name.as_deref().map(HSTRING::from);
+                let pcw = new_name.as_ref().map(|h| PCWSTR(h.as_ptr())).unwrap_or(PCWSTR::null());
+                if mv {
+                    fo.MoveItem(&item, &target, pcw, None)?;
+                } else {
+                    fo.CopyItem(&item, &target, pcw, None)?;
+                }
+            }
+            let performed = fo.PerformOperations();
+            let aborted = fo.GetAnyOperationsAborted().map(|b| b.as_bool()).unwrap_or(false);
+            match performed {
+                Ok(()) => Ok(aborted),
+                Err(e) if aborted || e.code().0 as u32 == 0x8027_0000 => Ok(true),
+                Err(e) => Err(e),
+            }
+        })();
+        if init.is_ok() {
+            CoUninitialize();
+        }
+        result
+    }
+}
+
 /* ---------------- Glisser-déposer ---------------- */
 
 /// Fait passer une fenêtre au premier plan, même pendant un glisser-déposer
@@ -521,6 +559,96 @@ pub fn rescue_keys() -> Option<(u8, isize)> {
         let mut pid = 0u32;
         GetWindowThreadProcessId(fg, Some(&mut pid));
         (pid == std::process::id()).then_some((which, fg.0 as isize))
+    }
+}
+
+/* ---------------- Fenêtres de l'Explorateur Windows (remplacées par Kane) ---------------- */
+
+/// Fenêtres visibles de l'Explorateur de fichiers de Windows (classe « CabinetWClass »). Aucun accès COM : très léger.
+pub fn explorer_hwnds() -> Vec<isize> {
+    unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> windows::core::BOOL {
+        let list = &mut *(lp.0 as *mut Vec<isize>);
+        let mut buf = [0u16; 32];
+        let n = GetClassNameW(h, &mut buf) as usize;
+        if IsWindowVisible(h).as_bool() && String::from_utf16_lossy(&buf[..n]) == "CabinetWClass" {
+            list.push(h.0 as isize);
+        }
+        true.into()
+    }
+    let mut list: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut list as *mut _ as isize));
+    }
+    list
+}
+
+/// « file:///C:/Users/x/Mes%20images » -> « C:\Users\x\Mes images » ; dossiers virtuels (Corbeille, Panneau de configuration…) : None.
+fn url_to_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file://")?;
+    let (host, path) = match rest.strip_prefix('/') {
+        Some(p) => ("", p),
+        None => rest.split_once('/').unwrap_or((rest, "")),
+    };
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() + 0 && i + 2 <= bytes.len() - 1 + 0 {
+            if let Ok(v) = u8::from_str_radix(&path[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    let decoded = String::from_utf8(out).ok()?.replace('/', "\\");
+    if decoded.starts_with("::") || decoded.contains("::{") {
+        return None;
+    }
+    if host.is_empty() {
+        let b = decoded.as_bytes();
+        let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+        let short = b.len() == 2;
+        drive.then(|| if short { format!("{decoded}\\") } else { decoded.clone() })
+    } else {
+        Some(format!("\\\\{host}\\{decoded}"))
+    }
+}
+
+/// Dossier affiché par une fenêtre de l'Explorateur et élément mis en évidence (« Afficher dans le dossier »), lus via IShellWindows.
+/// À appeler depuis un fil où COM est initialisé. None : fenêtre pas encore prête ou dossier virtuel.
+pub fn explorer_location(hwnd: isize) -> Option<(String, Option<String>)> {
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+    unsafe {
+        let sw: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        let count = sw.Count().ok()?;
+        for i in 0..count {
+            let Ok(disp) = sw.Item(&windows::Win32::System::Variant::VARIANT::from(i)) else { continue };
+            let Ok(wb) = disp.cast::<IWebBrowser2>() else { continue };
+            let Ok(h) = wb.HWND() else { continue };
+            if h.0 as isize != hwnd {
+                continue;
+            }
+            let path = url_to_path(&wb.LocationURL().ok()?.to_string())?;
+            let selected = (|| {
+                let doc = wb.Document().ok()?;
+                let view: IShellFolderViewDual = doc.cast().ok()?;
+                let item = view.FocusedItem().ok()?;
+                let p = item.Path().ok()?.to_string();
+                (!p.is_empty() && !p.starts_with("::")).then_some(p)
+            })();
+            return Some((path, selected));
+        }
+        None
+    }
+}
+
+/// Ferme une fenêtre (demande polie, comme la croix).
+pub fn close_window(hwnd: isize) {
+    unsafe {
+        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_CLOSE, WPARAM(0), LPARAM(0));
     }
 }
 

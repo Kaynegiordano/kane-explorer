@@ -154,7 +154,6 @@ function paletteCommands() {
       c('Sélectionner tout', () => { tab.items.forEach((e) => tab.selected.add(e.path)); paintSelection(); }, { kbd: 'Ctrl+A' }),
       c('Copier le chemin du dossier', () => copyPaths([tab.path])),
       c('Ouvrir dans le Terminal', () => openTerminal(), { keywords: 'powershell cmd' }),
-      c('Ouvrir dans l’Explorateur Windows', () => winCall('open_in_windows_explorer', { path: tab.path })),
       c('Analyser l’espace de ce dossier', () => openDiskUsage(tab.path), { keywords: 'taille disque gros fichiers' }),
       c('Rechercher les doublons ici', () => openDuplicates(tab.path)),
       c(isPinned(tab.path) ? 'Désépingler ce dossier' : 'Épingler ce dossier', () => (isPinned(tab.path) ? unpinFolder(tab.path) : pinFolder(tab.path))),

@@ -1925,7 +1925,16 @@ document.addEventListener('keydown', (ev) => {
 
 /* ---------------- Démarrage ---------------- */
 
+/* Un autre programme a ouvert une fenêtre de l'Explorateur Windows : Kane l'a fermée et ouvre le même dossier ici (voir start_explorer_guard) */
+window.__TAURI__.event.listen('open-here', async (ev) => {
+  const { path, select } = ev.payload || {};
+  if (!path) return;
+  await newTab(path);
+  if (select) setTimeout(() => selectPath(select), 350);
+});
+
 function featuresInit() {
+  invoke('explorer_guard', { on: prefs.guardExplorer }).catch(() => {});
   els.search.placeholder = 'Rechercher… (type:image note:4 p:prompt)';
   $('btn-options').insertAdjacentHTML('beforebegin', '<button class="nav-item update-btn" id="update-btn" hidden></button>');
   $('update-btn').onclick = installUpdate;

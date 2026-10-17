@@ -470,11 +470,134 @@ async fn create_folder(parent: String) -> Result<String, String> {
     .await?
 }
 
-/// Colle (copie ou déplace) des éléments dans `dest` avec le moteur de l'Explorateur
-/// (barre de progression, « Remplacer ou ignorer les fichiers »...). Renvoie les éléments créés.
+/// Un élément à coller qui existe déjà dans le dossier de destination.
+#[derive(Serialize)]
+struct Conflict {
+    name: String,
+    src: String,
+    is_dir: bool,
+    dst_is_dir: bool,
+    src_size: u64,
+    src_modified: u64,
+    dst_size: u64,
+    dst_modified: u64,
+}
+
+fn mtime_ms(m: &fs::Metadata) -> u64 {
+    m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Éléments de `paths` dont le nom existe déjà dans `dest` : l'interface de Kane demande quoi faire (remplacer, ignorer, garder les deux)
+/// avant la copie, à la place de la boîte de dialogue de Windows. Copier dans le dossier d'origine n'est pas un conflit (« - Copie »).
+#[tauri::command]
+async fn paste_conflicts(paths: Vec<String>, dest: String, cut: bool) -> Result<Vec<Conflict>, String> {
+    blocking(move || {
+        let dest_path = PathBuf::from(&dest);
+        let mut out = Vec::new();
+        for p in paths {
+            let src = PathBuf::from(&p);
+            let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+            let same_dir = src.parent().map(|x| x.to_string_lossy().eq_ignore_ascii_case(&dest_path.to_string_lossy())).unwrap_or(false);
+            if same_dir {
+                continue; // copie : « Copie de… » automatique ; déplacement : rien à faire
+            }
+            let target = dest_path.join(&name);
+            let (Ok(sm), Ok(tm)) = (fs::metadata(&src), fs::metadata(&target)) else { continue };
+            let _ = cut;
+            out.push(Conflict {
+                name,
+                src: p,
+                is_dir: sm.is_dir(),
+                dst_is_dir: tm.is_dir(),
+                src_size: if sm.is_dir() { 0 } else { sm.len() },
+                src_modified: mtime_ms(&sm),
+                dst_size: if tm.is_dir() { 0 } else { tm.len() },
+                dst_modified: mtime_ms(&tm),
+            });
+        }
+        out
+    })
+    .await
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    Replace,
+    Skip,
+    Both,
+}
+
+type PasteOp = (String, String, Option<String>);
+
+/// Prépare les opérations de copie / déplacement d'un élément selon la décision prise pour lui.
+/// Dossier déjà présent : on fusionne (la décision vaut pour chaque fichier de même nom à l'intérieur).
+fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collections::HashSet<String>, out: &mut Vec<PasteOp>, merged: &mut Vec<PathBuf>) {
+    let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
+    let target = dest_dir.join(&name);
+    let key = target.to_string_lossy().to_lowercase();
+    if !target.exists() && !reserved.contains(&key) {
+        reserved.insert(key);
+        out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), None));
+        return;
+    }
+    if src.is_dir() && target.is_dir() {
+        merged.push(src.to_path_buf());
+        if let Ok(rd) = fs::read_dir(src) {
+            for child in rd.flatten() {
+                plan_paste(&child.path(), &target, act, reserved, out, merged);
+            }
+        }
+        return;
+    }
+    // Un fichier face à un dossier (ou l'inverse) ne se remplace jamais : on garde les deux
+    let act = if src.is_dir() != target.is_dir() && act == Act::Replace { Act::Both } else { act };
+    match act {
+        Act::Skip => {}
+        Act::Replace => {
+            reserved.insert(key);
+            out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), None));
+        }
+        Act::Both => {
+            let (stem, ext) = match name.rfind('.') {
+                Some(i) if i > 0 && !src.is_dir() => (name[..i].to_string(), name[i..].to_string()),
+                _ => (name.clone(), String::new()),
+            };
+            let free = (2..)
+                .map(|n| format!("{stem} ({n}){ext}"))
+                .find(|c| {
+                    let k = dest_dir.join(c).to_string_lossy().to_lowercase();
+                    !dest_dir.join(c).exists() && !reserved.contains(&k)
+                })
+                .unwrap_or_else(|| name.clone());
+            reserved.insert(dest_dir.join(&free).to_string_lossy().to_lowercase());
+            out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), Some(free)));
+        }
+    }
+}
+
+/// Dossiers sources devenus vides après un déplacement fusionné : supprimés (du plus profond au plus haut), sans jamais toucher à un dossier non vide.
+fn remove_empty_sources(dirs: &[PathBuf]) {
+    fn rec(d: &Path) {
+        if let Ok(rd) = fs::read_dir(d) {
+            for e in rd.flatten() {
+                if e.path().is_dir() {
+                    rec(&e.path());
+                }
+            }
+        }
+        let _ = fs::remove_dir(d);
+    }
+    for d in dirs {
+        rec(d);
+    }
+}
+
+/// Colle (copie ou déplace) des éléments dans `dest` avec le moteur de l'Explorateur (progression, annulation, Corbeille pour l'annulation…).
+/// `decisions` : pour chaque nom déjà présent dans `dest`, « replace », « skip » ou « both » (choix faits dans Kane, voir `paste_conflicts`).
+/// Renvoie les éléments créés.
 #[cfg(windows)]
 #[tauri::command]
-async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: bool) -> Result<Vec<String>, String> {
+async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: bool, decisions: Option<std::collections::HashMap<String, String>>) -> Result<Vec<String>, String> {
     let dest_path = PathBuf::from(&dest);
     let same = |p: &Path| p.parent().map(|x| x.to_string_lossy().eq_ignore_ascii_case(&dest_path.to_string_lossy())).unwrap_or(false);
     let mut todo = Vec::new();
@@ -503,19 +626,64 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_lowercase())
         .collect();
-    let op = if cut { win::Op::Move } else { win::Op::Copy };
-    // Copie dans le même dossier : « fichier - Copie », comme l'Explorateur
-    let aborted = shell_file_op(&window, op, todo, Some(dest.clone()), !cut && all_same).await?;
+    let decided = decisions.filter(|d| !d.is_empty());
+    let aborted = if let Some(decisions) = decided {
+        // Conflits réglés dans Kane : plan détaillé, exécuté sans question de Windows
+        let owner = window.hwnd().map_err(err)?.0 as isize;
+        let (ops, merged) = {
+            let (mut ops, mut merged, mut reserved) = (Vec::new(), Vec::new(), std::collections::HashSet::new());
+            for p in &todo {
+                let src = PathBuf::from(p);
+                let name = src.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+                let act = match decisions.get(&name).map(String::as_str) {
+                    Some("replace") => Act::Replace,
+                    Some("both") => Act::Both,
+                    _ => Act::Skip, // sans décision : on ne touche à rien
+                };
+                plan_paste(&src, &dest_path, act, &mut reserved, &mut ops, &mut merged);
+            }
+            (ops, merged)
+        };
+        if ops.is_empty() {
+            return Ok(vec![]);
+        }
+        let ab = blocking(move || {
+            let ab = std::thread::spawn(move || win::file_ops(owner, cut, &ops)).join().map_err(|_| "Opération interrompue".to_string())?.map_err(|e| e.message().to_string())?;
+            if cut && !ab {
+                remove_empty_sources(&merged);
+            }
+            Ok::<bool, String>(ab)
+        })
+        .await??;
+        ab
+    } else {
+        let op = if cut { win::Op::Move } else { win::Op::Copy };
+        // Copie dans le même dossier : « fichier - Copie », comme l'Explorateur
+        shell_file_op(&window, op, todo.clone(), Some(dest.clone()), !cut && all_same).await?
+    };
+    // Éléments créés ou remplacés à la racine de la destination (noms de la sélection ou « (2) »)
+    let wanted: std::collections::HashSet<String> = todo
+        .iter()
+        .filter_map(|p| Path::new(p).file_name().map(|n| n.to_string_lossy().to_lowercase()))
+        .collect();
     let created: Vec<String> = fs::read_dir(&dest_path)
         .map_err(err)?
         .flatten()
-        .filter(|e| !before.contains(&e.file_name().to_string_lossy().to_lowercase()))
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_lowercase();
+            !before.contains(&n) || (decisions_touched(&n, &wanted))
+        })
         .map(|e| e.path().to_string_lossy().into_owned())
         .collect();
     if aborted && created.is_empty() {
         return Err("Opération annulée".into());
     }
     Ok(created)
+}
+
+/// Un élément déjà présent avant la collure mais qui porte le nom d'un élément collé (remplacé ou fusionné).
+fn decisions_touched(name: &str, wanted: &std::collections::HashSet<String>) -> bool {
+    wanted.contains(name)
 }
 
 /// Surveille le dossier affiché par une fenêtre : lui envoie « dir-changed » quand il change.
@@ -621,6 +789,88 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
         .await
         .map_err(err)?;
     app.restart();
+}
+
+/* ---------- Remplacer l'Explorateur Windows (fenêtres ouvertes par d'autres programmes) ---------- */
+
+static GUARD_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Active / désactive le remplacement des fenêtres de l'Explorateur Windows (Options).
+#[tauri::command]
+fn explorer_guard(on: bool) {
+    GUARD_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Pendant que Kane tourne : une nouvelle fenêtre de l'Explorateur Windows (« Afficher dans le dossier » d'un navigateur ou d'un jeu,
+/// recherche Windows, lien de dossier…) est fermée aussitôt et son dossier s'ouvre dans Kane, élément sélectionné compris.
+/// Les fenêtres déjà ouvertes au lancement de Kane, la Corbeille et les autres dossiers virtuels ne sont pas touchés.
+#[cfg(windows)]
+fn start_explorer_guard(app: tauri::AppHandle) {
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        }
+        let mut ignored: HashSet<isize> = win::explorer_hwnds().into_iter().collect();
+        let mut tries: HashMap<isize, u32> = HashMap::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let current = win::explorer_hwnds();
+            if !GUARD_ON.load(Ordering::Relaxed) {
+                ignored.extend(current); // désactivé : rien ne sera capturé après réactivation parmi les fenêtres déjà là
+                continue;
+            }
+            ignored.retain(|h| current.contains(h));
+            for h in current {
+                if ignored.contains(&h) {
+                    continue;
+                }
+                let n = tries.entry(h).or_insert(0);
+                *n += 1;
+                let attempt = *n;
+                match win::explorer_location(h) {
+                    // L'élément à mettre en évidence arrive un peu après la fenêtre : on patiente quelques instants
+                    Some((path, None)) if attempt < 4 => {
+                        let _ = path;
+                    }
+                    Some((path, select)) => {
+                        win::close_window(h);
+                        ignored.insert(h);
+                        tries.remove(&h);
+                        let target = app
+                            .webview_windows()
+                            .into_iter()
+                            .find(|(_, w)| w.is_focused().unwrap_or(false))
+                            .map(|(l, _)| l)
+                            .or_else(|| app.get_webview_window("main").map(|_| "main".to_string()))
+                            .or_else(|| app.webview_windows().keys().next().cloned());
+                        match target {
+                            Some(label) => {
+                                if let Some(w) = app.get_webview_window(&label) {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    if let Ok(hwnd) = w.hwnd() {
+                                        win::raise(hwnd, true);
+                                    }
+                                }
+                                let _ = app.emit_to(label.as_str(), "open-here", serde_json::json!({ "path": path, "select": select }));
+                            }
+                            None => {
+                                let _ = open_window(&app, &path);
+                            }
+                        }
+                    }
+                    None if attempt > 12 => {
+                        ignored.insert(h); // dossier virtuel (Corbeille, Panneau de configuration…) : on laisse faire Windows
+                        tries.remove(&h);
+                    }
+                    None => {}
+                }
+            }
+        }
+    });
 }
 
 /// Relance Kane depuis zéro : nouveau processus puis arrêt immédiat de celui-ci (marche même si le fil principal est bloqué).
@@ -1359,6 +1609,8 @@ pub fn run() {
                     }
                 }
             }
+            #[cfg(windows)]
+            start_explorer_guard(app.handle().clone());
             // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane
             #[cfg(windows)]
             {
@@ -1411,6 +1663,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_dir,
             restart_app,
+            explorer_guard,
             launch_path,
             check_update,
             install_update,
@@ -1469,6 +1722,7 @@ pub fn run() {
             trash_paths,
             create_folder,
             paste,
+            paste_conflicts,
             watch_dir,
             shell_menu,
             properties,

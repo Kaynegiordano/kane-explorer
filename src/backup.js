@@ -28,7 +28,7 @@ async function exportSettings() {
   try {
     const path = await invoke('create_file', { parent: dir, name, content: json });
     toast(`${plural(Object.keys(data).length, 'réglage')} enregistrés dans « ${basename(path)} »`);
-    winCall('reveal_path', { path });
+    navigate(parentOf(path), { select: path }); // affiché dans Kane, pas dans l'Explorateur Windows
   } catch (err) { toast(cleanError(err), 'error'); }
 }
 

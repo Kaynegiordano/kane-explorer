@@ -56,7 +56,7 @@ async function shelfPaste(cut) {
   const paths = kShelf.filter((s) => !shelfMissing.has(keyOf(s.path))).map((s) => s.path);
   if (!paths.length) { toast('Rien à ' + (cut ? 'déplacer' : 'copier'), 'error'); return; }
   try {
-    const created = await invoke('paste', { paths, dest: tab.path, cut });
+    const created = await pasteWithPrompt(paths, tab.path, cut);
     toast(`${plural(created.length, 'élément')} ${cut ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} ici`);
     recordPaste(paths, created, cut, cut ? 'Déplacement depuis l’étagère' : 'Copie depuis l’étagère');
     if (cut) { kShelf = []; saveShelf(); }
