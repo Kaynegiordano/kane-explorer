@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.6.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.6.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -51,7 +51,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
 | `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoMoves`, `recordPaste`) |
 | `src/archive.js` | Archives comme dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`) |
-| `src/studio.js` | 1.6.0, chargé en dernier : barre des filtres IA (`renderAiBar`, `aiFacets`, `AI_FACETS` → recherche `p:`), images similaires (`openSimilar`), avant / après (`openSlider`, `vw.mode = 'slider'`, `vw.back` = retour à la visionneuse), mosaïque des dossiers en grille (`folderVisual`, `t.previews`), récents de l'accueil (`loadRecents`, `#home-recents`) |
+| `src/studio.js` | 1.6.0, chargé en dernier : barre des filtres IA (`renderAiBar`, `aiFacets`, `AI_FACETS` → recherche `p:`), images similaires (`openSimilar`), avant / après (`openSlider`, `vw.mode = 'slider'`, `vw.back` = retour à la visionneuse), mosaïque des dossiers en grille (`folderVisual`, `t.previews`) |
 | `src/backup.js` | Sauvegarde / restauration des réglages (`exportSettings`, `importSettings`, `restoreSettings`) : fichier `Documents\Kane-reglages-AAAA-MM-JJ.json` = tout `kane.*` du localStorage sauf `BACKUP_SKIP` (onglets, étagère, récents, fenêtres…) ; Options → Sauvegarde des réglages |
 | `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
 | `src-tauri/src/upscale.rs` | Agrandir les images par IA : Real-ESRGAN ncnn-vulkan (GPU) toujours ×4 (`realesrgan-x4plus-anime` = « Illustration », `realesrgan-x4plus` = « Photo », `-x` = qualité maximale TTA), puis Lanczos3 (crate `image`) vers ×2 / ×3 ; sortie `nom_xN` à côté (JPG q95, WebP sans perte, sinon PNG avec les blocs tEXt/iTXt/zTXt de l'original recopiés avant IDAT = prompts Forge conservés). Moteur cherché dans `%LOCALAPPDATA%\com.kane.explorer\realesrgan` puis `%APPDATA%\KaneClip\tools\realesrgan` ; sinon téléchargé (release officielle v0.2.5.0, 45 Mo, `curl.exe` de System32 + crate `zip`). Un seul travail à la fois (`Busy`), Arrêter tue le processus (`upscale_cancel`), avancement par l'évènement `upscale-progress` (filtré par libellé de fenêtre). Interface : `openUpscale` / `runUpscale` (features.js), menu « Agrandir (IA, sans perte de netteté)… », réglages `kane.upscale` |
@@ -123,7 +123,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   - Filtres IA : `afterLoad` lit les prompts d'office (`loadPrompts(t, true)`, silencieux) si le dossier a au moins 2 PNG/JPG/WebP (5 000 max, `wantsAiScan`). `t.promptsRaw` garde le texte d'origine (casse) pour les facettes ; un clic sur une valeur remplit la recherche `p: model: X` / `p: lora:` (sous-chaîne, cf. `matchFilter`). Barre `#ai-bar` entre la barre d'actions et `.workspace`.
   - Images similaires (`imgtools::similar_images`) : dHash 64 bits (9×8 en gris) sur la miniature du cache Windows (`win::thumbnail_png(…, 128, true, true)`, contrôle de la forme), sinon image complète ; regroupement autour d'un « chef » (meilleure définition d'abord, distance ≤ 5, même rapport largeur/hauteur à 3 %) : pas de chaînes. Mesures réelles (test ignoré `mesure_distances`, `SIM_DIR=…`) : agrandissement 0-3 bits, img2img faible débruitage 0, générations différentes ≥ 8. Pré-cochés seulement : copie d'un même nom dans un autre format, original d'un `_xN` ; les variantes restent décochées. Annulation = `cancel_scan` (même `extras::CANCEL` que les doublons).
   - Avant / après : deux `<img>` superposées dans `.sl-box` (forme de l'image « avant »), la seconde découpée par `clip-path: inset(0 0 0 X%)` ; survol = séparation, molette = zoom (transformation de la boîte), glisser = déplacer, S = échanger. Bouton dans la visionneuse si `findOriginal` trouve l'original d'un `_x2/_x3/_x4`, dans la comparaison de 2 images, et clic droit « Image et IA ».
-  - `folder_previews` : ≤ 4 images/vidéos par sous-dossier, 300 entrées lues au plus par sous-dossier, en parallèle ; seulement en vue grille. `recent_files` : Bureau, Téléchargements, Documents, Images, Vidéos, Captures, OBS, `<lecteur>:\KaneOS\output` (profondeur 3), 6 fichiers max par dossier ; cache de 20 s côté page ; clic = afficher (après 260 ms), double-clic = ouvrir.
+  - `folder_previews` : ≤ 4 images/vidéos par sous-dossier, 300 entrées lues au plus par sous-dossier, en parallèle ; seulement en vue grille.
   - Réseau : `network_adapters` (PowerShell ~0,7 s) n'est plus appelé au démarrage, au retour sur la fenêtre ni en boucle toutes les 4 s ; seulement au survol / clic du logo (cache 30 s) et sur `network-changed` si déjà lu.
   - Mesures de référence (version de dev) : System32 (5 028 éléments) 46 ms, WinSxS (25 906) 270 ms, défilement 14 ms/image.
 - **Visionneuse 1.5.0** (features.js) : `renderStrip` (bande de miniatures, ~80 dans le DOM autour de l'image, reconstruite près des bords ou après `stripReset`), `viewerFullscreen` (fenêtre entière via `appWin.setFullscreen`, permission `allow-set-fullscreen` ; classe `.fs`, barres flottantes masquées après 2,2 s sans souris : `.idle`) ; Échap sort d'abord du plein écran ; `toggleSlideshow` (3,5 s), `cycleViewerBg` (`kane.viewerBg`, attribut `data-bg`), `kane.viewerStrip`. Glisser l'image non zoomée (ou Alt + glisser) = `start_drag` vers un autre logiciel (`viewerDragOut`). `copyImage` : `clipboard_image` (CF_HDROP + « PNG » + CF_DIBV5, vérifié : Bitmap 1856×1024 + FileDrop). `copyText` passe par `clipboard_text` (CF_UNICODETEXT) : `navigator.clipboard` ouvrait une demande d'autorisation WebView2 sans geste récent. Le clavier de la visionneuse laisse passer les touches quand une modale est ouverte (`!modal.hidden`). `openUpscale(list, onDone)` → `viewerInsert`.
@@ -254,6 +254,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.4.0 | Agrandir les images par IA (Real-ESRGAN sur la carte graphique) : ×2 / ×3 / ×4, Illustration ou Photo, qualité maximale, prompts IA conservés |
 | 1.6.0 | Filtres IA (pastilles modèle / LoRA / sampler / taille / CFG / étapes), images similaires (empreinte visuelle, 0,4 s pour 50 images via le cache de miniatures Windows), avant / après au curseur, dossiers en mosaïque (grille), récents sur l'accueil, cartes réseau lues à la demande (plus de PowerShell au démarrage) |
 | 1.5.0 | Visionneuse : Agrandir IA (U, le résultat s'affiche après l'original), Copier l'image (Ctrl+C, pixels + fichier) / le prompt (Ctrl+Maj+C), Ouvrir avec, bande de miniatures (T), fonds sombre / damier / clair (B), diaporama (P), plein écran (F11), glisser l'image vers un autre logiciel, dimensions ; boutons du panneau IA actifs dans la visionneuse. Clic droit « Image et IA › » (copier image / prompt / négatif / paramètres, copie sans prompt ni EXIF). Copies de texte par le presse-papiers Windows. « Images Forge » = C:\KaneOS\output\forge |
+| 1.6.1 | Accueil sans « Récents » ; démarrage plus léger : la barre latérale ne retarde plus l'affichage, lecteurs testés en parallèle (1,5 s au plus), `setup` n'attend plus les lecteurs |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -301,6 +302,13 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **Démarrage** (1.6.1) : rien de ce qui touche un disque ne doit retarder l'affichage. `drive_roots` / `drives` testent chaque lecteur sur son
+  propre fil avec un délai maximal (1,5 s / 2 s ; lecteur muet = gardé, sans barre d'espace libre) à partir de `GetLogicalDrives` (aucun accès disque) ;
+  `loadSidebar({wait:false})` + `drivesReady` : l'accueil et les onglets s'affichent sans attendre l'espace libre des lecteurs (un disque en veille,
+  une carte vide ou un lecteur réseau déconnecté bloquaient tout, par intermittence). `setup` n'attend les droits d'assets que 200 ms. Mesure de la page :
+  DOMContentLoaded ≈ 30 ms, 14 appels au moteur de ≤ 40 ms (banc d'essai : `Network.enable` en CDP, requêtes `ipc.localhost`). L'accueil ne lance plus
+  de parcours de dossiers (les « Récents » parcouraient Bureau, Documents, Images, Forge… à chaque affichage de l'accueil, et demandaient 14 miniatures).
 
 - **Ne jamais bloquer un fil de l'exécuteur asynchrone** (1.3.2) : Tauri n'a que N fils (= nombre de cœurs, 8 chez l'utilisateur). Une
   commande `async fn` qui fait du travail bloquant (fichiers, ShellExecute, attente du fil principal…) en occupe un ; quand tous sont pris,

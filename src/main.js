@@ -803,9 +803,7 @@ function renderHome() {
         `<div class="sub">${fmtSize(d.free)} libres sur ${fmtSize(d.total)}</div>` : '') +
       `</div></button>`;
   }).join('');
-  const recents = `<div class="home-recents-wrap"><h2>Récents</h2><div class="recents" id="home-recents"></div></div>`;
-  els.content.innerHTML = `<div class="home">${homePinnedHtml()}${recents}<h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
-  loadRecents();
+  els.content.innerHTML = `<div class="home">${homePinnedHtml()}<h2>Accès rapide</h2><div class="cards">${places}</div><h2>Lecteurs</h2><div class="cards">${drives}</div></div>`;
 }
 
 function segments(path) {
@@ -891,9 +889,15 @@ function renderSidebar() {
   if (tab) markActive();
 }
 
-async function loadSidebar() {
-  [shared.places, shared.drives] = await Promise.all([invoke('places'), invoke('drives')]);
+/** Dossiers personnels tout de suite ; lecteurs (espace libre : un disque en veille peut tarder) dès qu'ils répondent.
+ *  `wait: false` : rend la main après les dossiers, `drivesReady` signale la fin des lecteurs. */
+let drivesReady = Promise.resolve();
+async function loadSidebar({ wait = true } = {}) {
+  const d = invoke('drives');
+  shared.places = await invoke('places');
   renderSidebar();
+  drivesReady = d.then((list) => { shared.drives = list; renderSidebar(); }).catch(() => {});
+  if (wait) await drivesReady;
 }
 
 /* ---------------- Sélection ---------------- */
@@ -2228,7 +2232,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.body.classList.toggle('single-click', prefs.clickMode === 'single');
     document.body.classList.toggle('single-folders', prefs.clickMode === 'folders');
   document.body.classList.toggle('no-anim', !prefs.animations);
-  await loadSidebar();
+  // La barre latérale (lecteurs, espace libre) se charge en parallèle : un disque en veille ne retarde plus l'affichage
+  await loadSidebar({ wait: false });
+  drivesReady.then(() => { if (!tab) return; if (tab.path === HOME) render(); renderTabs(); });
   // Dossier de départ selon l'option « Au démarrage » (ou celui demandé par une nouvelle fenêtre)
   const saved = isMainWindow && prefs.startup === 'restore' ? store.get('tabs', null) : null;
   let paths = [HOME];

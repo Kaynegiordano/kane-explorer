@@ -439,14 +439,3 @@ body.no-anim .sl-box { transition: none; }
 .thumb.mosaic.n3 img:first-child { grid-row: span 2; }
 .mosaic-badge { position: absolute; left: 4px; bottom: 4px; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; background: color-mix(in srgb, var(--panel) 85%, transparent); box-shadow: 0 1px 4px rgba(0, 0, 0, .25); }
 .mosaic-badge .ficon { width: 20px; height: 20px; }
-
-/* Récents (accueil) */
-.home-recents-wrap[hidden] { display: none; }
-.recents { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
-.recent { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 6px; border-radius: 10px; border: 1px solid transparent; background: var(--bg); min-width: 0; text-align: center; }
-.recent:hover { border-color: var(--border); background: var(--hover); }
-.recent-visual { width: 84px; height: 64px; display: grid; place-items: center; }
-.recent-visual img { max-width: 84px; max-height: 64px; object-fit: contain; border-radius: 4px; }
-.recent-visual .ficon { width: 40px; height: 40px; }
-.recent-name { font-size: 12px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-sub { font-size: 11px; color: var(--muted); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

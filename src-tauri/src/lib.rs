@@ -288,22 +288,80 @@ fn drive_info(_: &str) -> (String, u64, u64) {
     (String::new(), 0, 0)
 }
 
+/// Lettres de lecteurs présentes, vues par Windows (aucun accès disque : instantané).
+#[cfg(windows)]
+fn drive_letters() -> Vec<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
+    let mask = unsafe { GetLogicalDrives() };
+    (0..26u8).filter(|i| mask & (1 << i) != 0).map(|i| format!("{}:\\", (b'A' + i) as char)).collect()
+}
+#[cfg(not(windows))]
+fn drive_letters() -> Vec<String> {
+    Vec::new()
+}
+
+/// Lecteurs utilisables. Chaque lecteur est testé sur son propre fil et on n'attend que 1,5 s au total :
+/// un disque en veille, une carte vide ou un lecteur réseau déconnecté ne bloquent plus l'ouverture de Kane.
+/// Un lecteur qui n'a pas répondu à temps est gardé (il existe pour Windows) ; une carte vide (réponse « absent ») est écartée.
 fn drive_roots() -> Vec<String> {
-    (b'A'..=b'Z')
-        .map(|c| format!("{}:\\", c as char))
-        .filter(|p| Path::new(p).exists())
-        .collect()
+    let letters = drive_letters();
+    let (tx, rx) = std::sync::mpsc::channel();
+    for l in &letters {
+        let (tx, l) = (tx.clone(), l.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send((l.clone(), Path::new(&l).exists()));
+        });
+    }
+    drop(tx);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    let mut absent = std::collections::HashSet::new();
+    let mut answered = 0;
+    while answered < letters.len() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((l, ok)) => {
+                answered += 1;
+                if !ok {
+                    absent.insert(l);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    letters.into_iter().filter(|l| !absent.contains(l)).collect()
 }
 
 /// Lecteurs disponibles avec leur espace libre.
 #[tauri::command]
 async fn drives() -> Vec<Drive> {
-    // Hors du fil asynchrone : un lecteur réseau ou une carte qui répond lentement ne doit rien bloquer
+    // Hors du fil asynchrone, tous les lecteurs en parallèle, 2 s maximum : un lecteur lent apparaît sans barre d'espace libre
     tauri::async_runtime::spawn_blocking(|| {
-        drive_roots()
+        let roots = drive_roots();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for (i, path) in roots.iter().enumerate() {
+            let (tx, path) = (tx.clone(), path.clone());
+            std::thread::spawn(move || {
+                let _ = tx.send((i, drive_info(&path)));
+            });
+        }
+        drop(tx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2000);
+        let mut infos: Vec<Option<(String, u64, u64)>> = vec![None; roots.len()];
+        let mut n = 0;
+        while n < roots.len() {
+            match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok((i, info)) => {
+                    infos[i] = Some(info);
+                    n += 1;
+                }
+                Err(_) => break,
+            }
+        }
+        roots
             .into_iter()
-            .map(|path| {
-                let (label, total, free) = drive_info(&path);
+            .zip(infos)
+            .map(|(path, info)| {
+                let (label, total, free) = info.unwrap_or_default();
                 Drive { letter: path[..1].to_string(), label, path, total, free }
             })
             .collect()
@@ -1071,68 +1129,6 @@ async fn folder_previews(dir: String) -> Result<Vec<(String, Vec<Entry>)>, Strin
     .await
 }
 
-const RECENT_PER_DIR: usize = 6;
-
-/// Derniers fichiers modifiés dans les dossiers de tous les jours (Bureau, Téléchargements, Images, Forge, OBS…).
-#[tauri::command]
-async fn recent_files(limit: usize) -> Result<Vec<Entry>, String> {
-    blocking(move || {
-        let mut roots: Vec<(PathBuf, u32)> = [dirs::desktop_dir(), dirs::download_dir(), dirs::document_dir(), dirs::picture_dir(), dirs::video_dir(), screenshots_dir()]
-            .into_iter()
-            .flatten()
-            .map(|p| (p, 0))
-            .collect();
-        if let Some(p) = extras::obs_folder() {
-            roots.push((p, 0));
-        }
-        for d in drive_roots() {
-            let p = PathBuf::from(d).join("KaneOS").join("output");
-            if p.is_dir() {
-                roots.push((p, 3)); // output\forge\txt2img-images\<jour>
-            }
-        }
-        fn walk(dir: &Path, depth: u32, out: &mut Vec<Entry>) {
-            let Ok(rd) = fs::read_dir(dir) else { return };
-            for e in rd.flatten() {
-                let Ok(m) = e.metadata() else { continue };
-                let p = e.path();
-                if m.is_dir() {
-                    if depth > 0 {
-                        walk(&p, depth - 1, out);
-                    }
-                    continue;
-                }
-                let name = e.file_name().to_string_lossy().to_lowercase();
-                let junk = name == "desktop.ini" || name.ends_with(".lnk") || name.ends_with(".tmp") || name.ends_with(".crdownload")
-                    || name.ends_with(".part") || name.starts_with("~$");
-                if !junk && !is_hidden(&m) {
-                    out.push(file_entry(&p, &m));
-                }
-            }
-        }
-        let mut all = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for (root, depth) in roots {
-            if seen.insert(root.to_string_lossy().to_lowercase()) {
-                walk(&root, depth, &mut all);
-            }
-        }
-        all.sort_by(|a, b| b.modified.cmp(&a.modified));
-        all.dedup_by(|a, b| a.path.eq_ignore_ascii_case(&b.path));
-        // Pas plus de quelques fichiers par dossier : une séance de génération ne masque pas le reste
-        let mut per_dir: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        all.retain(|e| {
-            let dir = Path::new(&e.path).parent().map(|p| p.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let n = per_dir.entry(dir).or_default();
-            *n += 1;
-            *n <= RECENT_PER_DIR
-        });
-        all.truncate(limit.min(60));
-        all
-    })
-    .await
-}
-
 #[cfg(windows)]
 #[tauri::command]
 async fn clipboard_text(window: WebviewWindow, text: String) -> Result<(), String> {
@@ -1322,10 +1318,18 @@ pub fn run() {
         })
         .setup(|app| {
             // Autorise l'aperçu (images, vidéos, PDF) sur tous les lecteurs
-            let scope = app.asset_protocol_scope();
-            for root in drive_roots() {
-                let _ = scope.allow_directory(&root, true);
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let scope = handle.asset_protocol_scope();
+                    for root in drive_letters() {
+                        let _ = scope.allow_directory(&root, true);
+                    }
+                    let _ = done_tx.send(());
+                });
             }
+            let _ = done_rx.recv_timeout(std::time::Duration::from_millis(200));
             // Réseau : prévient les fenêtres quand une carte est branchée, débranchée, activée...
             #[cfg(windows)]
             {
@@ -1435,7 +1439,6 @@ pub fn run() {
             clipboard_text,
             similar_images,
             folder_previews,
-            recent_files,
             open_in_code,
             set_wallpaper,
             media_props,
