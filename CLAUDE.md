@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.8.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.9.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -169,14 +169,24 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   `Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}\shell\opennewwindow\command` (+ `DelegateExecute` vide).
   Écrit par l'installateur (question en fin d'installation) ou par Options → « Explorateur par défaut ».
   La désinstallation rétablit l'Explorateur. « Ouvrir dans l'Explorateur Windows » appelle `explorer.exe` directement.
-- **Copie / déplacement : conflits réglés dans Kane** (1.7.0 ; `paste_conflicts`, `askConflicts`, `pasteWithPrompt` dans main.js, `plan_paste` / `Act` dans
-  lib.rs, `win::file_ops`) : avant de coller, `paste_conflicts` liste les éléments dont le nom existe déjà à la destination (hors copie dans le dossier
-  d'origine : « - Copie » reste géré par Windows) ; la boîte de Kane propose par élément Remplacer / Ignorer / Garder les deux (dossier : Fusionner en
-  remplaçant / en gardant l'existant), et en un clic Tout remplacer, Tout ignorer, Garder les deux, Remplacer si plus récent. `paste` reçoit
-  `decisions` (nom en minuscules → `replace` | `skip` | `both`) et exécute un plan détaillé (`plan_paste` : fusion récursive des dossiers, noms
-  « fichier (2).txt », source vidée supprimée après un déplacement fusionné) via un seul `IFileOperation` en `FOF_NOCONFIRMATION` : plus aucune
-  question de remplacement de Windows. Sans conflit : ancien chemin (`shell_file_op`). Restent à Windows : la fenêtre de progression des grosses
-  copies, « fichier utilisé », droits administrateur. Appelants : `doPaste`, `dropInto`, `shelfPaste` (tools.js) ; l'annulation (`undo.js`) appelle `paste` sans décisions.
+- **Copie / déplacement : conflits et progression dans Kane** (1.7.0 conflits, 1.9.0 moteur ; `paste_conflicts`, `askConflicts`, `pasteWithPrompt` dans
+  main.js, `plan_paste` / `Act` / `copy_name` dans lib.rs, `src-tauri/src/copyeng.rs`) : avant de coller, `paste_conflicts` liste les éléments dont le nom
+  existe déjà à la destination (hors copie dans le dossier d'origine) ; la boîte de Kane propose par élément Remplacer / Ignorer / Garder les deux (dossier :
+  Fusionner en remplaçant / en gardant l'existant), et en un clic Tout remplacer, Tout ignorer, Garder les deux, Remplacer si plus récent. `paste` reçoit
+  `decisions` (nom en minuscules → `replace` | `skip` | `both`), construit un plan (`plan_paste` : fusion récursive des dossiers, noms « fichier (2).txt »,
+  « fichier - Copie.txt » / « - Copie (2) » pour une copie dans le même dossier) puis l'exécute avec **le moteur de Kane** (`copyeng::run`) : travaux
+  fichier par fichier par `CopyFileExW` (attributs, dates, flux NTFS conservés, liens symboliques copiés comme liens) ou `MoveFileWithProgressW`
+  (déplacement entre disques = copie puis suppression ; même volume : un dossier entier est simplement renommé, instantané). **Plus aucune fenêtre de
+  Windows** : l'avancement part en évènements `copy-progress {phase, move, total, done, file, filesDone, filesTotal, bps}` (au plus toutes les 120 ms,
+  seulement après 450 ms : les petites copies restent silencieuses) vers la fenêtre d'origine ; `features.js` affiche la carte `.copy-card` (barre,
+  « 27 % · 2,1 Go sur 7,8 Go · 3,7 Go/s · il reste 2 s », fichier en cours, bouton **Annuler** = `copy_cancel` → `CANCEL`, relu par la fonction de
+  rappel de `CopyFileExW` : arrêt immédiat, fichier partiel supprimé par Windows, ce qui est déjà copié est conservé). Fin : `phase: 'done'` ; échecs
+  (accès refusé, fichier utilisé…) et annulation : évènement `copy-issues` (toast, la copie continue pour les autres fichiers). Fichiers **remplacés** :
+  d'abord envoyés à la Corbeille (`shell_file_op` Recycle), jamais écrasés définitivement. Sans conflit ni décision : même chemin. Appelants : `doPaste`,
+  `dropInto`, `shelfPaste` (tools.js) ; l'annulation (`undo.js`) appelle `paste` sans décisions. Mesures (SSD NVMe) : 8 Go C: → D: en 2,6 s, première
+  mise à jour à 453 ms, copie identique octet pour octet ; déplacement d'un dossier de 300 Mo sur le même disque : 4 ms. Restent à Windows : la
+  Corbeille (`IFileOperation` Recycle, avec son avertissement si un fichier ne peut pas y aller) et les droits administrateur.
+  Piège de test : `cat <<EOF` altère `\\` en `\` (les chemins `D:\x` deviennent `D:x`) : écrire les scripts de test avec l'outil Write.
 - **Remplacer l'Explorateur Windows** (1.7.0, détection par évènement en 1.8.0 ; `start_explorer_guard` dans lib.rs, `win::watch_explorer_windows` /
   `explorer_hwnds` / `explorer_location` / `close_window`, option `prefs.guardExplorer` → commande `explorer_guard`, réglage aussi écrit dans
   `HKCU\Software\Kane Explorer\GuardExplorer`) : un crochet `SetWinEventHook(EVENT_OBJECT_SHOW)` sur un fil dédié signale les fenêtres `CabinetWClass`
@@ -285,6 +295,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.6.1 | Accueil sans « Récents » ; démarrage plus léger : la barre latérale ne retarde plus l'affichage, lecteurs testés en parallèle (1,5 s au plus), `setup` n'attend plus les lecteurs |
 | 1.7.0 | Conflits de copie / déplacement réglés dans Kane (remplacer, ignorer, garder les deux, fusion de dossiers) au lieu de la boîte de Windows ; les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes sont reprises par Kane (option) ; plus aucun menu vers l'Explorateur Windows |
 | 1.8.0 | Option « Garder Kane prêt en arrière-plan » : lancé avec Windows sans fenêtre (≈ 3,5 Mo, 0 % CPU), l'Explorateur Windows est remplacé même quand Kane est fermé ; détection des fenêtres de l'Explorateur par évènement système (plus de boucle) |
+| 1.9.0 | Progression des copies et déplacements dans Kane (carte avec barre, vitesse, temps restant, Annuler) à la place de la fenêtre de Windows ; moteur de copie maison (`copyeng.rs`) ; fichiers remplacés envoyés à la Corbeille ; « - Copie » géré par Kane |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

@@ -1933,6 +1933,35 @@ window.__TAURI__.event.listen('open-here', async (ev) => {
   if (select) setTimeout(() => selectPath(select), 350);
 });
 
+/* ----- Progression des copies et déplacements (moteur de Kane, plus la fenêtre de Windows) ----- */
+
+let copyCard = null;
+const fmtDur = (s) => (s < 60 ? `${Math.max(1, Math.round(s))} s` : s < 3600 ? `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, '0')} s` : `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, '0')} min`);
+
+window.__TAURI__.event.listen('copy-progress', (ev) => {
+  const p = ev.payload || {};
+  if (p.phase === 'done') { copyCard?.remove(); copyCard = null; return; }
+  if (!copyCard?.isConnected) {
+    copyCard = document.createElement('div');
+    copyCard.className = 'copy-card';
+    copyCard.innerHTML = '<div class="cc-top"><b class="cc-title"></b><button class="btn cc-cancel" title="Arrêter (ce qui est déjà copié est conservé)">Annuler</button></div><div class="cc-bar"><i></i></div><div class="cc-info"></div><div class="cc-file"></div>';
+    copyCard.querySelector('.cc-cancel').onclick = (e) => { e.currentTarget.disabled = true; e.currentTarget.textContent = 'Arrêt…'; invoke('copy_cancel').catch(() => {}); };
+    document.body.append(copyCard);
+  }
+  const pct = p.total ? Math.min(100, (p.done / p.total) * 100) : 0;
+  copyCard.querySelector('.cc-title').textContent = `${p.move ? 'Déplacement' : 'Copie'} de ${plural(p.filesTotal || 1, 'fichier')}`;
+  copyCard.querySelector('.cc-bar i').style.width = pct.toFixed(1) + '%';
+  const left = p.bps > 0 ? (p.total - p.done) / p.bps : 0;
+  copyCard.querySelector('.cc-info').textContent = `${pct.toFixed(0)} % · ${fmtSize(p.done)} sur ${fmtSize(p.total)}${p.bps > 0 ? ` · ${fmtSize(p.bps)}/s${left > 1 ? ` · il reste ${fmtDur(left)}` : ''}` : ''}`;
+  copyCard.querySelector('.cc-file').textContent = p.file || '';
+});
+
+window.__TAURI__.event.listen('copy-issues', (ev) => {
+  const { failed = [], count = 0, cancelled, move } = ev.payload || {};
+  if (cancelled) toast(`${move ? 'Déplacement' : 'Copie'} annulé${move ? '' : 'e'} : ce qui était déjà fait est conservé (Ctrl+Z pour l'annuler)`);
+  if (count) toast(`${plural(count, 'élément')} non ${move ? 'déplacé' : 'copié'}${count > 1 ? 's' : ''} : ${failed.map((f) => f.split(' : ').slice(-1)[0]).slice(0, 1).join('')} (${failed.map((f) => basename(f.split(' : ')[0])).join(', ')}${count > failed.length ? '…' : ''})`, 'error');
+});
+
 function featuresInit() {
   invoke('explorer_guard', { on: prefs.guardExplorer }).catch(() => {});
   els.search.placeholder = 'Rechercher… (type:image note:4 p:prompt)';

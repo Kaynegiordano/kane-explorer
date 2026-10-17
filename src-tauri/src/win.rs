@@ -245,6 +245,7 @@ pub fn clipboard_clear(hwnd: HWND) -> Result<()> {
 
 /* ---------------- Opérations de fichiers (moteur de l'Explorateur) ---------------- */
 
+#[allow(dead_code)]
 pub enum Op {
     Recycle,
     Copy,
@@ -285,44 +286,6 @@ pub fn file_op(owner: isize, op: Op, paths: &[String], dest: Option<&str>, renam
             match performed {
                 Ok(()) => Ok(aborted),
                 // Annulation par l'utilisateur : pas une erreur
-                Err(e) if aborted || e.code().0 as u32 == 0x8027_0000 => Ok(true),
-                Err(e) => Err(e),
-            }
-        })();
-        if init.is_ok() {
-            CoUninitialize();
-        }
-        result
-    }
-}
-
-/// Copie / déplacement d'une liste d'opérations déjà décidées par Kane (source, dossier de destination, nom imposé) :
-/// les conflits ont été réglés dans l'interface de Kane, Windows ne pose plus aucune question de remplacement.
-/// Renvoie `true` si l'opération a été annulée (ou en partie).
-pub fn file_ops(owner: isize, mv: bool, ops: &[(String, String, Option<String>)]) -> Result<bool> {
-    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
-    unsafe {
-        let init = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        let result = (|| -> Result<bool> {
-            let fo: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
-            // NOCONFIRMATION : « oui à tout » (remplacer sans demander) ; NOCONFIRMMKDIR : crée les dossiers manquants
-            fo.SetOperationFlags(FOF_ALLOWUNDO | FOFX_ADDUNDORECORD | FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR)?;
-            fo.SetOwnerWindow(HWND(owner as *mut _))?;
-            for (src, dest, name) in ops {
-                let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(src.as_str()), None)?;
-                let target: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(dest.as_str()), None)?;
-                let new_name = name.as_deref().map(HSTRING::from);
-                let pcw = new_name.as_ref().map(|h| PCWSTR(h.as_ptr())).unwrap_or(PCWSTR::null());
-                if mv {
-                    fo.MoveItem(&item, &target, pcw, None)?;
-                } else {
-                    fo.CopyItem(&item, &target, pcw, None)?;
-                }
-            }
-            let performed = fo.PerformOperations();
-            let aborted = fo.GetAnyOperationsAborted().map(|b| b.as_bool()).unwrap_or(false);
-            match performed {
-                Ok(()) => Ok(aborted),
                 Err(e) if aborted || e.code().0 as u32 == 0x8027_0000 => Ok(true),
                 Err(e) => Err(e),
             }

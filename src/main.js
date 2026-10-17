@@ -1048,7 +1048,6 @@ async function doPaste() {
   try { clip = await invoke('clipboard_get'); }
   catch (e) { toast(cleanError(e), 'error'); return; }
   if (!clip.paths.length) { toast('Le presse-papiers ne contient aucun fichier'); return; }
-  const slow = setTimeout(() => toast(clip.cut ? 'Déplacement en cours…' : 'Copie en cours…'), 400);
   let created = [];
   try {
     created = await pasteWithPrompt(clip.paths, tab.path, clip.cut);
@@ -1057,7 +1056,6 @@ async function doPaste() {
     toast(`${plural(created.length, 'élément')} ${clip.cut ? 'déplacé' : 'collé'}${created.length > 1 ? 's' : ''}`);
     recordPaste(clip.paths, created, clip.cut, clip.cut ? 'Déplacement' : 'Collage');
   } catch (e) { toast(cleanError(e), 'error'); }
-  clearTimeout(slow);
   await refresh();
   if (created.length) { const i = tab.items.findIndex((e) => e.path === created[0]); if (i >= 0) { tab.focus = i; scrollToItem(i); paintSelection(); } }
 }
@@ -1865,14 +1863,12 @@ async function dropInto(paths, dest) {
   const move = mods.ctrl ? false : mods.shift ? true : paths.every((p) => drive(p) === drive(dest));
   const todo = paths.filter((p) => !samePath(p, dest) && !(move && samePath(parentOf(p) || '', dest)));
   if (!todo.length) return;
-  const slow = setTimeout(() => toast(move ? 'Déplacement en cours…' : 'Copie en cours…'), 400);
   try {
     const created = await pasteWithPrompt(todo, dest, move);
     toast(`${plural(created.length, 'élément')} ${move ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} vers « ${basename(dest) || dest} »`);
     recordPaste(todo, created, move, move ? 'Déplacement' : 'Copie');
     if (samePath(dest, tab.path)) tab.selected = new Set(created);
   } catch (e) { toast(cleanError(e), 'error'); }
-  clearTimeout(slow);
   await refresh();
 }
 

@@ -9,6 +9,8 @@ use tauri::{Emitter, Manager, State, WebviewWindow};
 
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+mod copyeng;
 mod columns;
 mod extras;
 mod fsx;
@@ -470,6 +472,13 @@ async fn create_folder(parent: String) -> Result<String, String> {
     .await?
 }
 
+/// Bouton « Annuler » de la progression de copie : le fichier en cours s'arrête aussitôt, ce qui est déjà copié est conservé.
+#[tauri::command]
+fn copy_cancel() {
+    #[cfg(windows)]
+    copyeng::CANCEL.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Un élément à coller qui existe déjà dans le dossier de destination.
 #[derive(Serialize)]
 struct Conflict {
@@ -531,7 +540,7 @@ type PasteOp = (String, String, Option<String>);
 
 /// Prépare les opérations de copie / déplacement d'un élément selon la décision prise pour lui.
 /// Dossier déjà présent : on fusionne (la décision vaut pour chaque fichier de même nom à l'intérieur).
-fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collections::HashSet<String>, out: &mut Vec<PasteOp>, merged: &mut Vec<PathBuf>) {
+fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collections::HashSet<String>, out: &mut Vec<PasteOp>, merged: &mut Vec<PathBuf>, replaced: &mut Vec<PathBuf>) {
     let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
     let target = dest_dir.join(&name);
     let key = target.to_string_lossy().to_lowercase();
@@ -544,7 +553,7 @@ fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collect
         merged.push(src.to_path_buf());
         if let Ok(rd) = fs::read_dir(src) {
             for child in rd.flatten() {
-                plan_paste(&child.path(), &target, act, reserved, out, merged);
+                plan_paste(&child.path(), &target, act, reserved, out, merged, replaced);
             }
         }
         return;
@@ -555,6 +564,9 @@ fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collect
         Act::Skip => {}
         Act::Replace => {
             reserved.insert(key);
+            if target.exists() {
+                replaced.push(target.clone()); // le fichier remplacé passe d'abord à la Corbeille : on peut le récupérer
+            }
             out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), None));
         }
         Act::Both => {
@@ -573,6 +585,24 @@ fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collect
             out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), Some(free)));
         }
     }
+}
+
+/// Copie dans le dossier d'origine : « fichier - Copie.txt », « fichier - Copie (2).txt »… comme l'Explorateur.
+fn copy_name(dest: &Path, src: &Path, reserved: &mut std::collections::HashSet<String>) -> String {
+    let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 && !src.is_dir() => (name[..i].to_string(), name[i..].to_string()),
+        _ => (name.clone(), String::new()),
+    };
+    for n in 1.. {
+        let cand = if n == 1 { format!("{stem} - Copie{ext}") } else { format!("{stem} - Copie ({n}){ext}") };
+        let key = dest.join(&cand).to_string_lossy().to_lowercase();
+        if !dest.join(&cand).exists() && !reserved.contains(&key) {
+            reserved.insert(key);
+            return cand;
+        }
+    }
+    name
 }
 
 /// Dossiers sources devenus vides après un déplacement fusionné : supprimés (du plus profond au plus haut), sans jamais toucher à un dossier non vide.
@@ -601,7 +631,6 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
     let dest_path = PathBuf::from(&dest);
     let same = |p: &Path| p.parent().map(|x| x.to_string_lossy().eq_ignore_ascii_case(&dest_path.to_string_lossy())).unwrap_or(false);
     let mut todo = Vec::new();
-    let mut all_same = true;
     for p in paths {
         let src = PathBuf::from(&p);
         let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -614,7 +643,6 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
         if src.is_dir() && dest_path.starts_with(&src) {
             return Err(format!("Impossible de placer « {name} » dans lui-même"));
         }
-        all_same &= same(&src);
         todo.push(p);
     }
     if todo.is_empty() {
@@ -626,41 +654,61 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_lowercase())
         .collect();
-    let decided = decisions.filter(|d| !d.is_empty());
-    let aborted = if let Some(decisions) = decided {
-        // Conflits réglés dans Kane : plan détaillé, exécuté sans question de Windows
-        let owner = window.hwnd().map_err(err)?.0 as isize;
-        let (ops, merged) = {
-            let (mut ops, mut merged, mut reserved) = (Vec::new(), Vec::new(), std::collections::HashSet::new());
-            for p in &todo {
-                let src = PathBuf::from(p);
-                let name = src.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-                let act = match decisions.get(&name).map(String::as_str) {
-                    Some("replace") => Act::Replace,
-                    Some("both") => Act::Both,
-                    _ => Act::Skip, // sans décision : on ne touche à rien
-                };
-                plan_paste(&src, &dest_path, act, &mut reserved, &mut ops, &mut merged);
+    let decisions = decisions.unwrap_or_default();
+    // Plan : chaque élément avec la décision prise pour lui (nom libre, remplacement, ignoré, fusion de dossiers)
+    let (ops, merged, replaced) = {
+        let (mut ops, mut merged, mut reserved, mut replaced) = (Vec::new(), Vec::new(), std::collections::HashSet::new(), Vec::new());
+        for p in &todo {
+            let src = PathBuf::from(p);
+            if !cut && same(&src) {
+                ops.push((p.clone(), dest.clone(), Some(copy_name(&dest_path, &src, &mut reserved))));
+                continue;
             }
-            (ops, merged)
-        };
-        if ops.is_empty() {
-            return Ok(vec![]);
+            let name = src.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let act = match decisions.get(&name).map(String::as_str) {
+                Some("replace") => Act::Replace,
+                Some("both") => Act::Both,
+                _ => Act::Skip, // sans décision : on ne touche à rien
+            };
+            plan_paste(&src, &dest_path, act, &mut reserved, &mut ops, &mut merged, &mut replaced);
         }
-        let ab = blocking(move || {
-            let ab = std::thread::spawn(move || win::file_ops(owner, cut, &ops)).join().map_err(|_| "Opération interrompue".to_string())?.map_err(|e| e.message().to_string())?;
-            if cut && !ab {
-                remove_empty_sources(&merged);
-            }
-            Ok::<bool, String>(ab)
-        })
-        .await??;
-        ab
-    } else {
-        let op = if cut { win::Op::Move } else { win::Op::Copy };
-        // Copie dans le même dossier : « fichier - Copie », comme l'Explorateur
-        shell_file_op(&window, op, todo.clone(), Some(dest.clone()), !cut && all_same).await?
+        (ops, merged, replaced)
     };
+    if ops.is_empty() {
+        return Ok(vec![]);
+    }
+    // Fichiers remplacés : envoyés d'abord à la Corbeille (récupérables), jamais écrasés définitivement
+    if !replaced.is_empty() {
+        let list: Vec<String> = replaced.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+        if shell_file_op(&window, win::Op::Recycle, list, None, false).await? {
+            return Err("Opération annulée".into());
+        }
+    }
+    let (app, label) = (window.app_handle().clone(), window.label().to_string());
+    let outcome = blocking(move || {
+        let emit_app = app.clone();
+        let emit_label = label.clone();
+        let out = copyeng::run(&ops, cut, &mut |p: &copyeng::Progress| {
+            let _ = emit_app.emit_to(
+                emit_label.as_str(),
+                "copy-progress",
+                serde_json::json!({ "phase": "run", "move": cut, "total": p.total, "done": p.done, "file": p.file, "filesDone": p.files_done, "filesTotal": p.files_total, "bps": p.bps }),
+            );
+        });
+        if cut && !out.cancelled {
+            remove_empty_sources(&merged);
+        }
+        if out.shown {
+            let _ = app.emit_to(label.as_str(), "copy-progress", serde_json::json!({ "phase": "done" }));
+        }
+        if !out.failed.is_empty() || out.cancelled {
+            let first: Vec<&String> = out.failed.iter().take(4).collect();
+            let _ = app.emit_to(label.as_str(), "copy-issues", serde_json::json!({ "failed": first, "count": out.failed.len(), "cancelled": out.cancelled, "move": cut }));
+        }
+        out
+    })
+    .await?;
+    let aborted = outcome.cancelled;
     // Éléments créés ou remplacés à la racine de la destination (noms de la sélection ou « (2) »)
     let wanted: std::collections::HashSet<String> = todo
         .iter()
@@ -1852,6 +1900,7 @@ pub fn run() {
             create_folder,
             paste,
             paste_conflicts,
+            copy_cancel,
             watch_dir,
             shell_menu,
             properties,

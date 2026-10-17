@@ -458,3 +458,15 @@ body.no-anim .sl-box { transition: none; }
 .cf-opt input:checked + span { background: var(--accent); border-color: var(--accent); color: #fff; }
 .cf-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 860px) { .cf-row { grid-template-columns: 1fr; } }
+
+/* Progression des copies */
+.copy-card { position: fixed; right: 18px; bottom: 44px; z-index: 40; width: 360px; padding: 12px 14px 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .28); animation: in .18s ease-out; }
+.copy-card .cc-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.copy-card .cc-title { font-weight: 600; }
+.copy-card .cc-cancel { height: 26px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.copy-card .cc-cancel:hover:not(:disabled) { background: var(--hover); }
+.copy-card .cc-bar { height: 6px; border-radius: 4px; background: var(--border); margin: 10px 0 8px; overflow: hidden; }
+.copy-card .cc-bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 4px; transition: width .12s linear; }
+.copy-card .cc-info { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.copy-card .cc-file { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.no-anim .copy-card .cc-bar i { transition: none; }
