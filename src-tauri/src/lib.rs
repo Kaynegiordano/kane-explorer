@@ -776,21 +776,121 @@ fn open_window(app: &tauri::AppHandle, path: &str) -> Result<(), String> {
     open_window_select(app, path, None)
 }
 
+/* ---------- Naissance des fenêtres : pleine vitesse et journal de démarrage ---------- */
+
+/// Fenêtres en cours de création : tant qu'il y en a, Kane ne repasse pas en mode économe
+/// (la liste des fenêtres de Tauri est encore vide pendant la création, `schedule_idle` s'y trompait).
+static CREATING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Début du processus et, par fenêtre, début / fin de sa création (ms depuis 1970) : lus par `startup_report`.
+static PROCESS_START: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+static WINDOW_BUILDS: Mutex<Vec<(String, u64, u64)>> = Mutex::new(Vec::new());
+/// Première fenêtre du processus : son temps compte depuis le lancement.
+static FIRST_WINDOW: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+const STARTUP_LOG_LINES: usize = 60;
+
+fn now_ms() -> u64 {
+    millis(Ok(SystemTime::now()))
+}
+
+/// Crée une fenêtre à pleine vitesse : le mode économe (arrière-plan) est coupé AVANT la création,
+/// sinon WebView2 démarrait sur les cœurs lents à priorité réduite.
+fn build_window(label: &str, build: impl FnOnce() -> tauri::Result<WebviewWindow>) -> Result<WebviewWindow, String> {
+    use std::sync::atomic::Ordering;
+    CREATING.fetch_add(1, Ordering::SeqCst);
+    let _ = FIRST_WINDOW.set(label.to_string());
+    #[cfg(windows)]
+    win::eco_mode(false);
+    let begin = now_ms();
+    let w = build();
+    CREATING.fetch_sub(1, Ordering::SeqCst);
+    if let Ok(mut b) = WINDOW_BUILDS.lock() {
+        b.retain(|(l, _, _)| l != label);
+        b.push((label.to_string(), begin, now_ms()));
+        let len = b.len();
+        if len > 20 {
+            b.drain(..len - 20);
+        }
+    }
+    w.map_err(err)
+}
+
+fn startup_log_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_local_data_dir().ok().map(|d| d.join("demarrage.log"))
+}
+
+/// La page a affiché son premier contenu : une ligne dans demarrage.log (60 dernières gardées).
+/// Première fenêtre : temps compté depuis le lancement du processus ; les suivantes : depuis leur création.
+#[tauri::command]
+fn startup_report(app: tauri::AppHandle, window: WebviewWindow, page_start: u64, dom_ready: u64, content: u64, retries: u32, when: String) {
+    let label = window.label().to_string();
+    let build = WINDOW_BUILDS.lock().ok().and_then(|b| b.iter().find(|(l, _, _)| *l == label).cloned());
+    let process = PROCESS_START.get().copied();
+    let first = FIRST_WINDOW.get().is_some_and(|l| *l == label);
+    let d = |a: u64, b: u64| b.saturating_sub(a);
+    let mut parts = Vec::new();
+    let origin = match (first, process, &build) {
+        // (une page rechargée bien plus tard n'est plus un « démarrage »)
+        (true, Some(p), Some((_, begin, _))) if begin.saturating_sub(p) < 60_000 && page_start.saturating_sub(p) < 60_000 => {
+            parts.push(format!("lancement → création {} ms", d(p, *begin)));
+            p
+        }
+        (_, _, Some((_, begin, _))) => *begin,
+        _ => page_start,
+    };
+    if let Some((_, begin, end)) = &build {
+        parts.push(format!("création fenêtre {} ms", d(*begin, *end)));
+        // Page lancée avant la fin de la création : ses premiers appels peuvent arriver avant l'enregistrement de la fenêtre
+        parts.push(if page_start < *end {
+            format!("page lancée {} ms avant la fin de la création", end - page_start)
+        } else {
+            format!("WebView2 → page {} ms", page_start - end)
+        });
+    }
+    parts.push(format!("page → prête {} ms", d(page_start, dom_ready)));
+    parts.push(format!("→ contenu {} ms", d(dom_ready, content)));
+    if retries > 0 {
+        parts.push(format!("appels retentés {retries}"));
+    }
+    let line = format!("{when}  {:<6} TOTAL {:>6} ms  |  {}", if first { "1re" } else { "autre" }, d(origin, content), parts.join("  |  "));
+    let Some(path) = startup_log_path(&app) else { return };
+    std::thread::spawn(move || {
+        let mut lines: Vec<String> = fs::read_to_string(&path).map(|t| t.lines().map(String::from).collect()).unwrap_or_default();
+        lines.push(line);
+        let start = lines.len().saturating_sub(STARTUP_LOG_LINES);
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = fs::write(&path, lines[start..].join("\r\n") + "\r\n");
+    });
+}
+
+/// Chemin du journal de démarrage (créé vide s'il n'existe pas encore) : ouvert depuis le menu du logo.
+#[tauri::command]
+fn startup_log(app: tauri::AppHandle) -> Result<String, String> {
+    let path = startup_log_path(&app).ok_or("Dossier de Kane introuvable")?;
+    if !path.exists() {
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        let _ = fs::write(&path, "Journal de démarrage de Kane Explorer (une ligne par fenêtre ouverte)\r\n");
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
 fn open_window_select(app: &tauri::AppHandle, path: &str, select: Option<&str>) -> Result<(), String> {
     start_ui_threads(app);
     let label = format!("w{}", SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
     let start = serde_json::to_string(path).map_err(err)?;
     let sel = serde_json::to_string(&select).map_err(err)?;
-    let w = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
-        .title("Kane Explorer")
-        .inner_size(1200.0, 760.0)
-        .min_inner_size(720.0, 480.0)
-        .decorations(false)
-        .initialization_script(format!("window.__KANE_START__ = {start}; window.__KANE_SELECT__ = {sel};"))
-        .build()
-        .map_err(err)?;
-    #[cfg(windows)]
-    win::eco_mode(false);
+    let w = build_window(&label.clone(), || {
+        tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
+            .title("Kane Explorer")
+            .inner_size(1200.0, 760.0)
+            .min_inner_size(720.0, 480.0)
+            .decorations(false)
+            .initialization_script(format!("window.__KANE_START__ = {start}; window.__KANE_SELECT__ = {sel};"))
+            .build()
+    })?;
     let _ = w.set_focus();
     Ok(())
 }
@@ -815,14 +915,9 @@ fn ensure_main_window(app: &tauri::AppHandle, launch: Option<String>, select: Op
     }
     let cfg = app.config().app.windows.first().cloned().ok_or("Fenêtre principale introuvable")?;
     let sel = serde_json::to_string(&select).map_err(err)?;
-    let w = tauri::WebviewWindowBuilder::from_config(app, &cfg)
-        .map_err(err)?
-        .initialization_script(format!("window.__KANE_SELECT__ = {sel};"))
-        .build()
-        .map_err(err)?;
+    let builder = tauri::WebviewWindowBuilder::from_config(app, &cfg).map_err(err)?;
+    let w = build_window(&cfg.label, || builder.initialization_script(format!("window.__KANE_SELECT__ = {sel};")).build())?;
     fit_window(&w);
-    #[cfg(windows)]
-    win::eco_mode(false);
     let _ = w.set_focus();
     Ok(())
 }
@@ -961,7 +1056,8 @@ fn set_background(on: bool) -> Result<(), String> {
 fn schedule_idle(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(2500));
-        if app.webview_windows().is_empty() {
+        // (une fenêtre en cours de création n'est pas encore dans la liste de Tauri)
+        if app.webview_windows().is_empty() && CREATING.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             #[cfg(windows)]
             {
                 win::eco_mode(true);
@@ -1783,6 +1879,7 @@ fn thumb_response(uri: &str) -> tauri::http::Response<Vec<u8>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = PROCESS_START.set(now_ms());
     let args: Vec<String> = std::env::args().collect();
     tauri::Builder::default()
         // Une seule instance : un nouveau lancement (Windows + E, dossier ouvert ailleurs)
@@ -1837,6 +1934,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_dir,
+            startup_report,
+            startup_log,
             restart_app,
             explorer_guard,
             background_status,

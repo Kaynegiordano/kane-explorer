@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.9.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.9.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -42,6 +42,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/index.html` | Squelette : barre latérale, onglets, barre d'outils, contenu, volet d'aperçu, modale |
 | `src/styles.css` | Design de base, thème clair/sombre (`prefers-color-scheme`), règle globale `[hidden]{display:none!important}` |
 | `src/creative.css` | Styles des fonctions avancées (badges, visionneuse, analyse disque, glisser, réseau…) |
+| `src/boot.js` | Chargé en premier : retente les appels refusés par Tauri (« failed to acquire webview reference ») pendant la naissance d'une fenêtre ; `reportStartup()` → `startup_report` (demarrage.log) |
 | `src/main.js` | Cœur : état (`prefs`, `tabs`, `tab`, `shared`), navigation, affichage **virtualisé**, aperçu, menus, clavier, options |
 | `src/features.js` | Fonctions avancées, chargé **après** main.js (scripts classiques partageant la portée globale) |
 | `src/pins.js` | Épinglés (dossiers, fichiers, lecteurs ; glisser pour réordonner ; renommer), Accès rapide personnalisable (masquer, renommer, réordonner), boîte `promptDialog` |
@@ -296,6 +297,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.7.0 | Conflits de copie / déplacement réglés dans Kane (remplacer, ignorer, garder les deux, fusion de dossiers) au lieu de la boîte de Windows ; les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes sont reprises par Kane (option) ; plus aucun menu vers l'Explorateur Windows |
 | 1.8.0 | Option « Garder Kane prêt en arrière-plan » : lancé avec Windows sans fenêtre (≈ 3,5 Mo, 0 % CPU), l'Explorateur Windows est remplacé même quand Kane est fermé ; détection des fenêtres de l'Explorateur par évènement système (plus de boucle) |
 | 1.9.0 | Progression des copies et déplacements dans Kane (carte avec barre, vitesse, temps restant, Annuler) à la place de la fenêtre de Windows ; moteur de copie maison (`copyeng.rs`) ; fichiers remplacés envoyés à la Corbeille ; « - Copie » géré par Kane |
+| 1.9.1 | Fin des « failed to acquire webview reference » (appels retentés pendant la naissance d'une fenêtre, `boot.js`) ; mode économe coupé avant la création d'une fenêtre ; journal de démarrage (menu du logo → Dépannage) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -343,6 +345,11 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **« failed to acquire webview reference »** (1.9.1) : Tauri (ipc/protocol.rs) ne trouve pas la fenêtre de la page qui appelle. Une fenêtre n'est enregistrée qu'après `build()` ; or la page démarre ~6 ms AVANT la fin de `build()` (mesuré dans demarrage.log : « page lancée N ms avant la fin de la création »). Fenêtres créées depuis un autre fil (Windows + E, `new_window`, Explorateur repris) + PC chargé = premiers appels refusés : dossier non chargé, évènements non écoutés, toasts empilés. Correctif : `boot.js` remplace `__TAURI_INTERNALS__.invoke` (tous les appels, y compris ceux de Tauri) et retente jusqu'à ~10 s. Ne pas retirer.
+- **Mode économe** (arrière-plan 1.8) : `build_window` coupe EcoQoS AVANT la création (avant, WebView2 démarrait bridé) ; `CREATING` empêche `schedule_idle` de le remettre pendant une création (la liste de Tauri est vide tant que la fenêtre n'est pas enregistrée).
+- **Journal de démarrage** : `%LOCALAPPDATA%\com.kane.explorer\demarrage.log` (60 lignes) ; « 1re » = depuis le lancement du processus. Mesures du 20/10/2026 : démarrage ≈ 0,4-0,6 s, fenêtre suivante ≈ 0,2-0,4 s ; un démarrage à froid de 10 s observé une fois sur la 1.9.0 (avant la création de la fenêtre), non reproduit : lire le journal si l'utilisateur le revoit.
+- **Mesurer le Kane installé sans le modifier** : lancer l'exe avec `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333` puis lire la page par CDP.
 
 - **Démarrage** (1.6.1) : rien de ce qui touche un disque ne doit retarder l'affichage. `drive_roots` / `drives` testent chaque lecteur sur son
   propre fil avec un délai maximal (1,5 s / 2 s ; lecteur muet = gardé, sans barre d'espace libre) à partir de `GetLogicalDrives` (aucun accès disque) ;

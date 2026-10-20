@@ -2308,6 +2308,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (launch) { active = makeTab(launch); tabs.push(active); }
   await switchTab(active);
   els.content.focus();
+  reportStartup(); // temps de démarrage -> demarrage.log (boot.js)
   featuresInit();
   // Ouvert par « Afficher dans le dossier » d'un autre programme : l'élément visé est sélectionné
   if (window.__KANE_SELECT__) setTimeout(() => selectPath(window.__KANE_SELECT__), 400);

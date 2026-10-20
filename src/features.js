@@ -1688,6 +1688,7 @@ document.querySelector('.sidebar .brand').addEventListener('click', async () => 
     { label: '<b>Dépannage</b>', disabled: true },
     { label: 'Débloquer l’affichage', kbd: 'Ctrl+Maj+F5', run: unstick },
     { label: 'Redémarrer Kane', kbd: 'Ctrl+Maj+F12', run: restartKane },
+    { label: 'Journal de démarrage', run: () => invoke('startup_log').then((path) => invoke('open_path', { path })).catch((err) => toast(cleanError(err), 'error')) },
     '-',
     { label: '<b>Carte réseau</b>', disabled: true },
     ...networkMenuItems(),
