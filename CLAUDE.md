@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.9.1** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.10.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `D:\Claude Code\kane-explorer`
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
@@ -56,6 +56,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/backup.js` | Sauvegarde / restauration des réglages (`exportSettings`, `importSettings`, `restoreSettings`) : fichier `Documents\Kane-reglages-AAAA-MM-JJ.json` = tout `kane.*` du localStorage sauf `BACKUP_SKIP` (onglets, étagère, récents, fenêtres…) ; Options → Sauvegarde des réglages |
 | `src-tauri/src/columns.rs` | `file_columns` : dimensions (en-têtes PNG/JPEG/GIF/BMP/WebP), durée (propriétés Windows), texte `parameters` IA |
 | `src-tauri/src/upscale.rs` | Agrandir les images par IA : Real-ESRGAN ncnn-vulkan (GPU) toujours ×4 (`realesrgan-x4plus-anime` = « Illustration », `realesrgan-x4plus` = « Photo », `-x` = qualité maximale TTA), puis Lanczos3 (crate `image`) vers ×2 / ×3 ; sortie `nom_xN` à côté (JPG q95, WebP sans perte, sinon PNG avec les blocs tEXt/iTXt/zTXt de l'original recopiés avant IDAT = prompts Forge conservés). Moteur cherché dans `%LOCALAPPDATA%\com.kane.explorer\realesrgan` puis `%APPDATA%\KaneClip\tools\realesrgan` ; sinon téléchargé (release officielle v0.2.5.0, 45 Mo, `curl.exe` de System32 + crate `zip`). Un seul travail à la fois (`Busy`), Arrêter tue le processus (`upscale_cancel`), avancement par l'évènement `upscale-progress` (filtré par libellé de fenêtre). Interface : `openUpscale` / `runUpscale` (features.js), menu « Agrandir (IA, sans perte de netteté)… », réglages `kane.upscale` |
+| `src-tauri/src/fileops.rs` | 1.10.0 : `file_hashes` (MD5 / SHA-1 / SHA-256 en une lecture, crates `md-5` `sha1` `sha2`), `unblock_files` (supprime le flux NTFS `:Zone.Identifier`, dossiers récursifs), `folder_size` (aperçu d'un dossier ; `SIZE_GEN` interrompt le calcul quand une demande plus récente arrive, 8 fils), `convert_images` (JPG q92 fond blanc / PNG / WebP sans perte via la crate `image`, sans ffmpeg ; PNG/JPG/WebP/BMP/GIF/TIFF seulement, sinon repli ffmpeg ; les prompts ne suivent pas). Interface : `openHashes` (vérification par collage de l'empreinte), `fileToolsMenu` (menu « Outils du fichier »), `convertImagesNative` dans features.js |
 | `src-tauri/src/imgtools.rs` | `strip_metadata` : copie « nom_partage » sans prompt ni EXIF, sans réencoder (PNG : retire tEXt/iTXt/zTXt/eXIf/tIME ; JPEG : APP1/APP13/COM, garde APP2 ICC ; WebP : EXIF/XMP + drapeaux VP8X) ; `clipboard_image` : PNG + DIB v5 32 bits pour le presse-papiers |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
@@ -298,6 +299,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.8.0 | Option « Garder Kane prêt en arrière-plan » : lancé avec Windows sans fenêtre (≈ 3,5 Mo, 0 % CPU), l'Explorateur Windows est remplacé même quand Kane est fermé ; détection des fenêtres de l'Explorateur par évènement système (plus de boucle) |
 | 1.9.0 | Progression des copies et déplacements dans Kane (carte avec barre, vitesse, temps restant, Annuler) à la place de la fenêtre de Windows ; moteur de copie maison (`copyeng.rs`) ; fichiers remplacés envoyés à la Corbeille ; « - Copie » géré par Kane |
 | 1.9.1 | Fin des « failed to acquire webview reference » (appels retentés pendant la naissance d'une fenêtre, `boot.js`) ; mode économe coupé avant la création d'une fenêtre ; journal de démarrage (menu du logo → Dépannage) |
+| 1.10.0 | Taille des dossiers dans l'aperçu ; empreintes MD5/SHA-1/SHA-256 avec vérification ; Débloquer les fichiers téléchargés ; conversion d'images JPG/PNG/WebP sans ffmpeg ; optimisations : analyse d'espace et badges de sous-dossiers en pool de 8 fils (plus un fil par dossier), compilation `opt-level = 3` |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,

@@ -404,6 +404,74 @@ async function convertFiles(list, preset) {
   }
 }
 
+/* ---------------- Conversion d'images native, empreintes, déblocage ---------------- */
+
+const NATIVE_IMG = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff']);
+
+/** Images converties par Kane lui-même (crate `image`), sans ffmpeg. Les prompts des PNG ne suivent pas : copie « pour partager ». */
+async function convertImagesNative(list, format) {
+  const todo = list.filter((e) => e.ext !== format && !(format === 'jpg' && e.ext === 'jpeg'));
+  if (!todo.length) { toast('Déjà dans ce format'); return; }
+  toast(todo.length === 1 ? `Conversion de « ${todo[0].name} »…` : `Conversion de ${todo.length} images…`);
+  try {
+    const [done, errors] = await invoke('convert_images', { paths: todo.map((e) => e.path), format, quality: 92 });
+    errors.forEach((m) => toast(m, 'error'));
+    if (done.length) toast(done.length === 1 ? `Créé : ${basename(done[0])}` : `${done.length} images converties`);
+    const last = done[done.length - 1];
+    if (last && samePath(parentOf(last), tab.path)) { await refresh(true); selectPath(last); }
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+async function unblockFiles(list) {
+  try {
+    const n = await invoke('unblock_files', { paths: list.map((e) => e.path) });
+    toast(n ? `${plural(n, 'fichier')} débloqué${n > 1 ? 's' : ''}` : 'Rien à débloquer : aucune marque Internet');
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+/** Fenêtre des empreintes : copier chacune, ou coller celle du site de téléchargement pour vérifier le fichier. */
+async function openHashes(e) {
+  openModal(`<h2>Empreintes du fichier</h2><p class="lead">${esc(e.name)} · calcul en cours…</p>`);
+  let h;
+  try { h = await invoke('file_hashes', { path: e.path }); }
+  catch (err) { closeModal(); toast(cleanError(err), 'error'); return; }
+  if (modal.hidden) return;
+  const rows = [['SHA-256', h.sha256], ['SHA-1', h.sha1], ['MD5', h.md5]];
+  modalBox.innerHTML = `<h2>Empreintes du fichier</h2>
+    <p class="lead">${esc(e.name)} · ${fmtSize(h.size)}</p>
+    ${rows.map(([k, v], i) => `<div style="margin:8px 0"><b>${k}</b>
+      <div style="display:flex;gap:8px;align-items:center"><code style="flex:1;word-break:break-all;user-select:all">${v}</code>
+      <button class="btn" data-x="copy" data-i="${i}">Copier</button></div></div>`).join('')}
+    <label style="display:block;margin-top:14px"><b>Vérifier</b> : collez l’empreinte indiquée par le site</label>
+    <input id="hash-check" type="text" spellcheck="false" placeholder="Empreinte attendue" style="width:100%;margin-top:6px">
+    <div id="hash-result" class="lead" style="min-height:22px"></div>
+    <div class="foot"><span></span><button class="btn primary" data-x="close">Fermer</button></div>`;
+  const input = $('hash-check');
+  const check = () => {
+    const want = input.value.replace(/[^0-9a-f]/gi, '').toLowerCase();
+    const out = $('hash-result');
+    if (!want) { out.textContent = ''; return; }
+    const hit = rows.find(([, v]) => v === want);
+    out.innerHTML = hit ? `<span style="color:#2e9d57">✓ Identique (${hit[0]}) : le fichier est intact</span>`
+      : `<span style="color:#d6453d">✗ Différente : le fichier est corrompu ou n’est pas le bon</span>`;
+  };
+  input.oninput = check;
+  modalBox.onclick = (ev) => {
+    const b = ev.target.closest('[data-x]');
+    if (!b) return;
+    if (b.dataset.x === 'copy') copyText(rows[+b.dataset.i][1], `${rows[+b.dataset.i][0]} copiée`);
+    if (b.dataset.x === 'close') closeModal();
+  };
+  input.focus();
+}
+
+function fileToolsMenu(sel, one) {
+  const items = [];
+  if (one && !one.is_dir) items.push({ label: 'Empreintes (SHA-256, SHA-1, MD5)…', run: () => openHashes(one) });
+  items.push({ label: 'Débloquer (retirer la marque « téléchargé »)', run: () => unblockFiles(sel) });
+  return items;
+}
+
 function showFfmpegHelp() {
   openModal(`<h2>Conversions : ffmpeg requis</h2>
     <p class="lead">Kane utilise <b>ffmpeg</b>, l’outil gratuit de référence, pour convertir vidéos, sons et images.
@@ -579,7 +647,14 @@ function featureItemMenu(sel, one) {
   // Conversions (même type pour toute la sélection)
   const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && IMG_VIEW.has(e.ext) ? 'image' : 'x')));
   if (kinds.size === 1 && !kinds.has('x')) {
-    for (const [preset, label] of CONVERSIONS[[...kinds][0]]) items.push({ label: kTools.ffmpeg ? label : `${label} (ffmpeg requis)`, run: () => convertFiles(sel, preset) });
+    const native = kinds.has('image') && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
+    for (const [preset, label] of CONVERSIONS[[...kinds][0]]) {
+      if (native) items.push({ label, run: () => convertImagesNative(sel, preset) });
+      else items.push({ label: kTools.ffmpeg ? label : `${label} (ffmpeg requis)`, run: () => convertFiles(sel, preset) });
+    }
+  }
+  if (sel.length && sel.every((e) => !e.virtual)) {
+    items.push({ label: 'Outils du fichier', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, fileToolsMenu(sel, one)) });
   }
   if (one?.is_dir || one?.kind === 'code') items.push({ label: 'Ouvrir dans VS Code', disabled: !kTools.code, run: () => openCode(one.path) });
   if (sel.length) {

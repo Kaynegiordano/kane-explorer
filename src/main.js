@@ -1460,7 +1460,11 @@ async function updatePreview() {
     }
   } else if (e.is_dir) {
     try { addInfo('Contenu', plural(await invoke('dir_count', { path: e.path }), 'élément')); }
-    catch { addInfo('Contenu', 'Accès refusé'); }
+    catch { addInfo('Contenu', 'Accès refusé'); return; }
+    // Taille totale (récursive, interrompue si la sélection change)
+    invoke('folder_size', { path: e.path }).then((r) => {
+      if (r && token === previewToken) addInfo('Taille', `${fmtSize(r[0])} <span style="color:var(--muted)">(${plural(r[1], 'fichier')})</span>`);
+    }).catch(() => {});
   } else if (isTextual(e) && !isCloudOnly(e)) {
     try {
       const text = await invoke('read_text', { path: e.path, max: 200000 });

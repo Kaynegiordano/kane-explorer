@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.9.1"
+version = "1.10.0"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
@@ -22,6 +22,9 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 png = "0.17"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif", "tiff"] }
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
 zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -53,7 +56,7 @@ windows = { version = "0.62", features = [
 
 # Binaire le plus petit et rapide possible en version finale
 [profile.release]
-opt-level = "s"
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = true

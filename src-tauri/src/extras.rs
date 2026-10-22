@@ -318,25 +318,44 @@ pub fn dir_info(path: &Path) -> DirInfo {
 /// Infos des sous-dossiers (badges Git, projets, Wallpaper Engine).
 pub fn scan_subdirs(dir: &Path) -> Vec<DirInfo> {
     let Ok(rd) = fs::read_dir(dir) else { return vec![] };
-    rd.flatten()
+    let dirs: Vec<PathBuf> = rd
+        .flatten()
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .filter_map(|e| {
-            let p = e.path();
-            let branch = p.join(".git").exists().then(|| git_branch_at(&p)).flatten();
-            let we = we_project(&p);
-            let projects = if branch.is_some() || p.join("package.json").exists() || p.join("Cargo.toml").exists() {
-                project_kinds(&p)
-            } else {
-                vec![]
-            };
-            (branch.is_some() || we.is_some() || !projects.is_empty()).then(|| DirInfo {
-                path: p.to_string_lossy().into_owned(),
-                git_branch: branch,
-                projects,
-                we,
-            })
+        .map(|e| e.path())
+        .collect();
+    let probe = |p: &PathBuf| -> Option<DirInfo> {
+        let branch = p.join(".git").exists().then(|| git_branch_at(p)).flatten();
+        let we = we_project(p);
+        let projects = if branch.is_some() || p.join("package.json").exists() || p.join("Cargo.toml").exists() {
+            project_kinds(p)
+        } else {
+            vec![]
+        };
+        (branch.is_some() || we.is_some() || !projects.is_empty()).then(|| DirInfo {
+            path: p.to_string_lossy().into_owned(),
+            git_branch: branch,
+            projects,
+            we,
         })
-        .collect()
+    };
+    // Petits dossiers : sur place ; sinon 8 fils (disque réseau ou OneDrive : les attentes se chevauchent)
+    if dirs.len() < 32 {
+        return dirs.iter().filter_map(probe).collect();
+    }
+    let out = Mutex::new(Vec::new());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|s| {
+        for _ in 0..8 {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(p) = dirs.get(i) else { break };
+                if let Some(d) = probe(p) {
+                    out.lock().unwrap().push(d);
+                }
+            });
+        }
+    });
+    out.into_inner().unwrap()
 }
 
 #[derive(Serialize)]
@@ -514,13 +533,16 @@ pub fn dir_sizes(dir: &Path, cache: &SizeCache) -> Vec<SizeEntry> {
         }
     }
     let results = Mutex::new(Vec::new());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    // 8 fils au plus (avant : un fil par sous-dossier, des milliers pour un gros dossier)
     std::thread::scope(|s| {
-        for (name, p) in todo {
-            let results = &results;
-            s.spawn(move || {
+        for _ in 0..todo.len().min(8) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some((name, p)) = todo.get(i) else { break };
                 let mut local = HashMap::new();
-                let (size, files) = walk_size(&p, &mut local);
-                results.lock().unwrap().push((SizeEntry { name, path: p.to_string_lossy().into_owned(), is_dir: true, size, files }, local));
+                let (size, files) = walk_size(p, &mut local);
+                results.lock().unwrap().push((SizeEntry { name: name.clone(), path: p.to_string_lossy().into_owned(), is_dir: true, size, files }, local));
             });
         }
     });

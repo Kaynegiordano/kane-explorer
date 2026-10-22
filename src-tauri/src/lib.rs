@@ -16,6 +16,7 @@ mod extras;
 mod fsx;
 mod upscale;
 mod imgtools;
+mod fileops;
 
 #[derive(Serialize)]
 struct Entry {
@@ -1644,6 +1645,40 @@ async fn strip_metadata(paths: Vec<String>) -> Result<(Vec<String>, Vec<String>)
     .await
 }
 
+/// Empreintes MD5 / SHA-1 / SHA-256 d'un fichier.
+#[tauri::command]
+async fn file_hashes(path: String) -> Result<fileops::Hashes, String> {
+    blocking(move || fileops::file_hashes(Path::new(&path))).await?
+}
+
+/// Retire la marque « téléchargé depuis Internet » des fichiers.
+#[tauri::command]
+async fn unblock_files(paths: Vec<String>) -> Result<usize, String> {
+    blocking(move || fileops::unblock(&paths)).await
+}
+
+/// Taille d'un dossier (`None` : remplacé par une demande plus récente).
+#[tauri::command]
+async fn folder_size(path: String) -> Result<Option<(u64, u64)>, String> {
+    blocking(move || fileops::folder_size(Path::new(&path))).await
+}
+
+/// Convertit des images en JPG / PNG / WebP sans ffmpeg. Renvoie (fichiers créés, erreurs).
+#[tauri::command]
+async fn convert_images(paths: Vec<String>, format: String, quality: u8) -> Result<(Vec<String>, Vec<String>), String> {
+    blocking(move || {
+        let (mut done, mut errors) = (Vec::new(), Vec::new());
+        for p in &paths {
+            match fileops::convert_image(Path::new(p), &format, quality, |d, n| unique_path(d, n, false)) {
+                Ok(out) => done.push(out.to_string_lossy().into_owned()),
+                Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+            }
+        }
+        (done, errors)
+    })
+    .await
+}
+
 /// Images qui se ressemblent dans un dossier (avancement : évènement `similar-progress` = [fait, total]).
 #[tauri::command]
 async fn similar_images(window: WebviewWindow, path: String, recursive: bool) -> Result<Vec<Vec<imgtools::SimImage>>, String> {
@@ -1964,6 +1999,10 @@ pub fn run() {
             upscale_run,
             upscale_cancel,
             strip_metadata,
+            file_hashes,
+            unblock_files,
+            folder_size,
+            convert_images,
             clipboard_image,
             clipboard_text,
             similar_images,
