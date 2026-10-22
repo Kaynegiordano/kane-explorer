@@ -1679,6 +1679,54 @@ async fn convert_images(paths: Vec<String>, format: String, quality: u8) -> Resu
     .await
 }
 
+/// Copies réduites d'images (plus grand côté en pixels, ou pourcentage). Renvoie (fichiers créés, erreurs).
+#[tauri::command]
+async fn resize_images(paths: Vec<String>, max_side: u32, percent: u32) -> Result<(Vec<String>, Vec<String>), String> {
+    blocking(move || {
+        let (mut done, mut errors) = (Vec::new(), Vec::new());
+        for p in &paths {
+            match fileops::resize_image(Path::new(p), max_side, percent, |d, n| unique_path(d, n, false)) {
+                Ok(out) => done.push(out.to_string_lossy().into_owned()),
+                Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+            }
+        }
+        (done, errors)
+    })
+    .await
+}
+
+/// Différences entre deux dossiers.
+#[tauri::command]
+async fn compare_dirs(a: String, b: String) -> Result<fileops::CmpResult, String> {
+    blocking(move || fileops::compare_dirs(Path::new(&a), Path::new(&b))).await?
+}
+
+/// Raccourci Windows (.lnk) vers `target`, créé dans `dir` (« Nom - Raccourci.lnk »).
+#[tauri::command]
+async fn create_shortcut(target: String, dir: String) -> Result<String, String> {
+    blocking(move || -> Result<String, String> {
+        let t = Path::new(&target);
+        let name = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| target.trim_end_matches(['\\', ':']).to_string());
+        let out = unique_path(Path::new(&dir), &format!("{name} - Raccourci.lnk"), false);
+        #[cfg(windows)]
+        win::create_shortcut(&target, &out.to_string_lossy()).map_err(err)?;
+        Ok(out.to_string_lossy().into_owned())
+    })
+    .await?
+}
+
+/// Crée un dossier et ses parents (copie vers un sous-dossier absent de l'autre côté d'une comparaison).
+#[tauri::command]
+async fn make_dirs(path: String) -> Result<(), String> {
+    blocking(move || fs::create_dir_all(&path).map_err(err)).await?
+}
+
+/// Dossier du Bureau (raccourcis « Envoyer vers le Bureau »).
+#[tauri::command]
+fn desktop_path() -> Option<String> {
+    dirs::desktop_dir().map(|p| p.to_string_lossy().into_owned())
+}
+
 /// Images qui se ressemblent dans un dossier (avancement : évènement `similar-progress` = [fait, total]).
 #[tauri::command]
 async fn similar_images(window: WebviewWindow, path: String, recursive: bool) -> Result<Vec<Vec<imgtools::SimImage>>, String> {
@@ -2003,6 +2051,11 @@ pub fn run() {
             unblock_files,
             folder_size,
             convert_images,
+            resize_images,
+            compare_dirs,
+            create_shortcut,
+            desktop_path,
+            make_dirs,
             clipboard_image,
             clipboard_text,
             similar_images,

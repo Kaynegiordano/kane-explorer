@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::fs::{self, File};
-use std::io::{BufWriter, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -140,7 +140,36 @@ pub fn folder_size(dir: &Path) -> Option<(u64, u64)> {
     Some((size + t.0, files + t.1))
 }
 
-/* ---------------- Conversion d'images ---------------- */
+/* ---------------- Conversion et redimensionnement d'images ---------------- */
+
+/// Encode en JPG (fond blanc, pas de transparence) / PNG / WebP sans perte.
+fn encode(img: &image::DynamicImage, ext: &str, quality: u8) -> Result<Vec<u8>, String> {
+    use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, webp::WebPEncoder};
+    use image::ImageEncoder;
+    let mut buf = Vec::new();
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let r = match ext {
+        "jpg" => {
+            let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+            for p in rgba.pixels() {
+                let a = p[3] as u32;
+                for c in &p.0[..3] {
+                    rgb.push(((*c as u32 * a + 255 * (255 - a)) / 255) as u8);
+                }
+            }
+            JpegEncoder::new_with_quality(&mut buf, quality.clamp(40, 100)).write_image(&rgb, w, h, image::ExtendedColorType::Rgb8)
+        }
+        "png" => PngEncoder::new(&mut buf).write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8),
+        _ => WebPEncoder::new_lossless(&mut buf).write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8),
+    };
+    r.map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+fn lower_ext(p: &Path) -> String {
+    p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+}
 
 /// Convertit une image en JPG / PNG / WebP (sans perte) à côté de l'original ; `name_for` donne un nom libre.
 pub fn convert_image(
@@ -149,48 +178,163 @@ pub fn convert_image(
     quality: u8,
     name_for: impl Fn(&Path, &str) -> PathBuf,
 ) -> Result<PathBuf, String> {
-    use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, webp::WebPEncoder};
-    use image::ImageEncoder;
-    let img = image::open(src).map_err(|e| format!("lecture impossible ({e})"))?;
-    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());
-    let dir = src.parent().unwrap_or(Path::new("."));
     let ext = match format {
-        "jpg" => "jpg",
-        "png" => "png",
-        "webp" => "webp",
+        "jpg" | "png" | "webp" => format,
         _ => return Err("format inconnu".into()),
     };
-    if src.extension().map(|e| e.to_string_lossy().to_lowercase() == ext || (ext == "jpg" && e.to_string_lossy().to_lowercase() == "jpeg")) == Some(true) {
+    let cur = lower_ext(src);
+    if cur == ext || (ext == "jpg" && cur == "jpeg") {
         return Err("déjà dans ce format".into());
     }
-    let out = name_for(dir, &format!("{stem}.{ext}"));
-    let w = BufWriter::new(File::create(&out).map_err(|e| e.to_string())?);
-    let result = match ext {
-        "jpg" => {
-            // Pas de transparence en JPG : fond blanc
-            let rgba = img.to_rgba8();
-            let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
-            for (x, y, p) in rgba.enumerate_pixels() {
-                let a = p[3] as u32;
-                let mix = |c: u8| ((c as u32 * a + 255 * (255 - a)) / 255) as u8;
-                rgb.put_pixel(x, y, image::Rgb([mix(p[0]), mix(p[1]), mix(p[2])]));
-            }
-            JpegEncoder::new_with_quality(w, quality.clamp(40, 100))
-                .write_image(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+    let img = image::open(src).map_err(|e| format!("lecture impossible ({e})"))?;
+    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());
+    let out = name_for(src.parent().unwrap_or(Path::new(".")), &format!("{stem}.{ext}"));
+    fs::write(&out, encode(&img, ext, quality)?).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// Copie réduite (Lanczos) : `max_side` > 0 = plus grand côté en pixels, sinon `percent`.
+/// Même format que l'original (GIF / BMP / TIFF -> PNG) ; les prompts d'un PNG sont recopiés. Nom : « image_1920px.png ».
+pub fn resize_image(
+    src: &Path,
+    max_side: u32,
+    percent: u32,
+    name_for: impl Fn(&Path, &str) -> PathBuf,
+) -> Result<PathBuf, String> {
+    let bytes = fs::read(src).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory(&bytes).map_err(|e| format!("lecture impossible ({e})"))?;
+    let (w, h) = (img.width(), img.height());
+    let (nw, nh) = if max_side > 0 {
+        let big = w.max(h);
+        if big <= max_side {
+            return Err(format!("déjà assez petite ({w} × {h})"));
         }
-        "png" => {
-            let rgba = img.to_rgba8();
-            PngEncoder::new(w).write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
-        }
-        _ => {
-            let rgba = img.to_rgba8();
-            WebPEncoder::new_lossless(w).write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
-        }
+        let k = max_side as f64 / big as f64;
+        (((w as f64 * k).round() as u32).max(1), ((h as f64 * k).round() as u32).max(1))
+    } else {
+        let p = percent.clamp(1, 99) as f64 / 100.0;
+        (((w as f64 * p).round() as u32).max(1), ((h as f64 * p).round() as u32).max(1))
     };
-    if let Err(e) = result {
-        let _ = fs::remove_file(&out);
-        return Err(e.to_string());
+    let small = img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3);
+    let cur = lower_ext(src);
+    let ext = match cur.as_str() {
+        "jpg" | "jpeg" => "jpg",
+        "webp" => "webp",
+        _ => "png",
+    };
+    let mut data = encode(&small, ext, 92)?;
+    if cur == "png" {
+        let chunks = crate::upscale::png_text_chunks(&bytes);
+        if !chunks.is_empty() {
+            if let Some(d) = crate::upscale::insert_chunks(&data, &chunks) {
+                data = d;
+            }
+        }
     }
+    let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());
+    let tag = if max_side > 0 { format!("{}px", nw.max(nh)) } else { format!("{percent}pc") };
+    let out = name_for(src.parent().unwrap_or(Path::new(".")), &format!("{stem}_{tag}.{ext}"));
+    fs::write(&out, data).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/* ---------------- Comparer deux dossiers ---------------- */
+
+#[derive(Serialize)]
+pub struct CmpRow {
+    /// Chemin relatif (« sous\fichier.txt »)
+    pub rel: String,
+    /// `left` (seulement à gauche), `right`, `newer_left`, `newer_right`, `diff` (même date, tailles différentes)
+    pub state: &'static str,
+    pub is_dir: bool,
+    pub size_a: u64,
+    pub size_b: u64,
+}
+
+#[derive(Serialize, Default)]
+pub struct CmpResult {
+    pub rows: Vec<CmpRow>,
+    pub same: u64,
+    pub truncated: bool,
+}
+
+const CMP_MAX: usize = 20_000;
+
+fn modified_ms(m: &fs::Metadata) -> u64 {
+    m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn listing(dir: &Path) -> std::collections::BTreeMap<String, (String, fs::Metadata)> {
+    let mut m = std::collections::BTreeMap::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if let Ok(md) = e.metadata() {
+                if !md.file_type().is_symlink() {
+                    m.insert(name.to_lowercase(), (name, md));
+                }
+            }
+        }
+    }
+    m
+}
+
+fn cmp_walk(a: &Path, b: &Path, rel: &Path, out: &mut CmpResult) {
+    if out.rows.len() >= CMP_MAX {
+        out.truncated = true;
+        return;
+    }
+    let (la, lb) = (listing(&a.join(rel)), listing(&b.join(rel)));
+    for (k, (name, ma)) in &la {
+        let r = rel.join(name);
+        let row = |state, sb: u64| CmpRow {
+            rel: r.to_string_lossy().into_owned(),
+            state,
+            is_dir: ma.is_dir(),
+            size_a: if ma.is_dir() { 0 } else { ma.len() },
+            size_b: sb,
+        };
+        match lb.get(k) {
+            None => out.rows.push(row("left", 0)),
+            Some((_, mb)) if ma.is_dir() && mb.is_dir() => cmp_walk(a, b, &r, out),
+            Some((_, mb)) if ma.is_dir() != mb.is_dir() => out.rows.push(row("diff", mb.len())),
+            Some((_, mb)) => {
+                let (ta, tb) = (modified_ms(ma), modified_ms(mb));
+                // 2 s de marge : FAT / clés USB arrondissent les dates
+                if ma.len() == mb.len() && ta.abs_diff(tb) <= 2000 {
+                    out.same += 1;
+                } else if ta.abs_diff(tb) <= 2000 {
+                    out.rows.push(row("diff", mb.len()));
+                } else {
+                    out.rows.push(row(if ta > tb { "newer_left" } else { "newer_right" }, mb.len()));
+                }
+            }
+        }
+        if out.rows.len() >= CMP_MAX {
+            out.truncated = true;
+            return;
+        }
+    }
+    for (k, (name, mb)) in &lb {
+        if !la.contains_key(k) {
+            out.rows.push(CmpRow {
+                rel: rel.join(name).to_string_lossy().into_owned(),
+                state: "right",
+                is_dir: mb.is_dir(),
+                size_a: 0,
+                size_b: if mb.is_dir() { 0 } else { mb.len() },
+            });
+        }
+    }
+}
+
+/// Différences entre deux dossiers (récursif ; un sous-dossier présent d'un seul côté = une seule ligne).
+pub fn compare_dirs(a: &Path, b: &Path) -> Result<CmpResult, String> {
+    if !a.is_dir() || !b.is_dir() {
+        return Err("Les deux éléments doivent être des dossiers".into());
+    }
+    let mut out = CmpResult::default();
+    cmp_walk(a, b, Path::new(""), &mut out);
     Ok(out)
 }
 
@@ -232,5 +376,47 @@ mod tests {
         assert_eq!(unblock(&[p.to_string_lossy().into_owned()]), 1);
         assert!(fs::read(PathBuf::from(&ads)).is_err());
         let _ = fs::remove_file(p);
+    }
+
+    #[test]
+    fn comparer_dossiers() {
+        let root = std::env::temp_dir().join("kane_cmp_test");
+        let _ = fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        fs::create_dir_all(a.join("sub")).unwrap();
+        fs::create_dir_all(b.join("sub")).unwrap();
+        fs::create_dir_all(a.join("seul")).unwrap();
+        fs::write(a.join("pareil.txt"), b"1").unwrap();
+        fs::copy(a.join("pareil.txt"), b.join("pareil.txt")).unwrap();
+        fs::write(a.join("sub/gauche.txt"), b"x").unwrap();
+        fs::write(b.join("droite.txt"), b"y").unwrap();
+        let r = compare_dirs(&a, &b).unwrap();
+        let st = |rel: &str| r.rows.iter().find(|x| x.rel == rel).map(|x| x.state);
+        assert_eq!(r.same, 1);
+        assert_eq!(st("seul"), Some("left"));
+        assert_eq!(st("sub\\gauche.txt"), Some("left"));
+        assert_eq!(st("droite.txt"), Some("right"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn redimensionner_garde_prompt() {
+        let d = std::env::temp_dir().join("kane_resize_test");
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let png = encode(&image::DynamicImage::new_rgba8(400, 200), "png", 92).unwrap();
+        let data = b"parameters\0un chat";
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(b"tEXt");
+        chunk.extend_from_slice(data);
+        chunk.extend_from_slice(&[0, 0, 0, 0]);
+        let src = d.join("img.png");
+        fs::write(&src, crate::upscale::insert_chunks(&png, &chunk).unwrap()).unwrap();
+        let out = resize_image(&src, 100, 0, |dir, n| dir.join(n)).unwrap();
+        assert!(out.ends_with("img_100px.png"));
+        let bytes = fs::read(&out).unwrap();
+        assert!(bytes.windows(7).any(|w| w == b"un chat"));
+        assert_eq!(image::open(&out).map(|i| (i.width(), i.height())).ok(), Some((100, 50)));
+        let _ = fs::remove_dir_all(d);
     }
 }

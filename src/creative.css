@@ -470,3 +470,25 @@ body.no-anim .sl-box { transition: none; }
 .copy-card .cc-info { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .copy-card .cc-file { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body.no-anim .copy-card .cc-bar i { transition: none; }
+
+/* 1.11.0 : choisir un dossier, comparer deux dossiers (actions.js) */
+.pf-list { margin: 10px 0 4px; max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.pf-item { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: baseline; text-align: left; padding: 7px 10px; border-radius: 6px; }
+.pf-item span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-item em { color: var(--muted); font-size: 11px; font-style: normal; }
+.pf-item:hover { background: var(--hover); }
+.pf-item.on { background: var(--accent-soft); outline: 1px solid var(--accent); }
+.pf-empty { color: var(--muted); padding: 10px; }
+.cmp-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; color: var(--muted); }
+.cmp-sides div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-sides b { color: var(--text); margin-right: 4px; }
+.cmp-chip { display: inline-block; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 10px; background: var(--hover); font-size: 12px; color: var(--text); }
+.cmp-chip.left, .cmp-row.left .cmp-st { color: #2f80ed; }
+.cmp-chip.right, .cmp-row.right .cmp-st { color: #9b51e0; }
+.cmp-chip.newer_left, .cmp-chip.newer_right, .cmp-row.newer_left .cmp-st, .cmp-row.newer_right .cmp-st { color: #d68a00; }
+.cmp-chip.diff, .cmp-row.diff .cmp-st { color: #d6453d; }
+.cmp-list { max-height: 52vh; overflow-y: auto; margin-bottom: 8px; border-top: 1px solid var(--border); }
+.cmp-row { display: grid; grid-template-columns: 18px 1fr 150px 150px; gap: 10px; align-items: center; padding: 4px 2px; border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer; }
+.cmp-rel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-st, .cmp-sz { font-size: 12px; white-space: nowrap; }
+.cmp-sz { color: var(--muted); text-align: right; }

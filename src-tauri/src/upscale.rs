@@ -115,7 +115,7 @@ pub fn cancelled() -> bool {
 }
 
 /// Blocs de texte d'un PNG (tEXt, iTXt, zTXt), bruts : prompts de Forge, logiciel…
-fn png_text_chunks(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn png_text_chunks(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
         return out;
@@ -138,7 +138,7 @@ fn png_text_chunks(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Insère des blocs bruts juste avant le premier IDAT.
-fn insert_chunks(png: &[u8], chunks: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn insert_chunks(png: &[u8], chunks: &[u8]) -> Option<Vec<u8>> {
     let mut i = 8;
     while i + 12 <= png.len() {
         let len = u32::from_be_bytes(png[i..i + 4].try_into().ok()?) as usize;

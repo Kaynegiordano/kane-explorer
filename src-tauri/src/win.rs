@@ -1185,3 +1185,19 @@ mod tests {
         assert!(!name.is_empty());
     }
 }
+
+/* ---------------- Raccourcis (.lnk) ---------------- */
+
+/// Crée un raccourci Windows `lnk` vers `target` (fichier, dossier ou lecteur).
+pub fn create_shortcut(target: &str, lnk: &str) -> Result<()> {
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+        link.SetPath(&HSTRING::from(target))?;
+        if let Some(dir) = std::path::Path::new(target).parent() {
+            let _ = link.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()));
+        }
+        link.cast::<IPersistFile>()?.Save(&HSTRING::from(lnk), true)
+    }
+}
