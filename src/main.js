@@ -155,7 +155,7 @@ function fmtSize(b) {
 }
 
 const KINDS = {
-  image: 'jpg jpeg png gif webp bmp svg ico heic tif tiff avif raw',
+  image: 'jpg jpeg png gif webp bmp svg ico heic heif hif tif tiff avif raw',
   video: 'mp4 mkv avi mov wmv webm flv m4v',
   audio: 'mp3 wav flac ogg m4a aac wma opus',
   pdf: 'pdf',

@@ -678,6 +678,38 @@ pub fn close_window(hwnd: isize) {
     }
 }
 
+/* ---------------- Décodage par les codecs de Windows (HEIC, HEIF, AVIF…) ---------------- */
+
+/// Décode une image avec les codecs installés dans Windows (WIC : « Extensions d'image HEIF » + « HEVC », AV1…),
+/// formats que la crate `image` ne lit pas. Renvoie largeur, hauteur, pixels RGBA et l'orientation signalée par le codec
+/// (1 = droite, sinon valeur EXIF 2-8 à appliquer).
+pub fn wic_decode(path: &str) -> Result<(u32, u32, Vec<u8>, u16)> {
+    use windows::Win32::Foundation::GENERIC_READ;
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let decoder = factory.CreateDecoderFromFilename(&HSTRING::from(path), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)?;
+        let frame = decoder.GetFrame(0)?;
+        let mut orientation = 1u16;
+        if let Ok(q) = frame.GetMetadataQueryReader() {
+            let mut v = PROPVARIANT::default();
+            if q.GetMetadataByName(w!("System.Photo.Orientation"), &mut v).is_ok() {
+                orientation = u16::try_from(&v).ok().filter(|o| (1..=8).contains(o)).unwrap_or(1);
+            }
+        }
+        let conv = factory.CreateFormatConverter()?;
+        conv.Initialize(&frame, &GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, None::<&IWICPalette>, 0.0, WICBitmapPaletteTypeCustom)?;
+        let (mut w, mut h) = (0u32, 0u32);
+        conv.GetSize(&mut w, &mut h)?;
+        let mut buf = vec![0u8; w as usize * h as usize * 4];
+        conv.CopyPixels(std::ptr::null(), w * 4, &mut buf)?;
+        Ok((w, h, buf, orientation))
+    }
+}
+
 /* ---------------- Miniatures Windows ---------------- */
 
 /// Miniature (ou icône) d'un fichier via le moteur de Windows, encodée en PNG.

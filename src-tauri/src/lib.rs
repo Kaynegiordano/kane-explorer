@@ -16,6 +16,7 @@ mod extras;
 mod fsx;
 mod upscale;
 mod imgtools;
+mod heif;
 mod fileops;
 
 #[derive(Serialize)]
@@ -1665,13 +1666,44 @@ async fn folder_size(path: String) -> Result<Option<(u64, u64)>, String> {
 
 /// Convertit des images en JPG / PNG / WebP sans ffmpeg. Renvoie (fichiers créés, erreurs).
 #[tauri::command]
-async fn convert_images(paths: Vec<String>, format: String, quality: u8) -> Result<(Vec<String>, Vec<String>), String> {
+async fn convert_images(window: WebviewWindow, paths: Vec<String>, format: String, quality: u8) -> Result<(Vec<String>, Vec<String>), String> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     blocking(move || {
+        // Plusieurs images à la fois (un dossier de photos d'iPhone : des centaines de HEIC de 12 Mpx) ;
+        // avancement envoyé à la fenêtre : évènement « convert-progress » = [faites, total]
+        let total = paths.len();
+        let next = AtomicUsize::new(0);
+        let finished = AtomicUsize::new(0);
+        let names = Mutex::new(()); // deux conversions ne choisissent jamais le même nom libre
+        let results = Mutex::new(vec![None; total]);
+        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8).min(total.max(1));
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(p) = paths.get(i) else { break };
+                    let r = fileops::convert_image(Path::new(p), &format, quality, |d, n| {
+                        let _lock = names.lock();
+                        let out = unique_path(d, n, false);
+                        let _ = fs::File::create(&out); // réserve le nom
+                        out
+                    });
+                    if let Ok(mut all) = results.lock() {
+                        all[i] = Some(r);
+                    }
+                    let n = finished.fetch_add(1, Ordering::Relaxed) + 1;
+                    if total > 1 {
+                        let _ = window.emit_to(window.label(), "convert-progress", (n, total));
+                    }
+                });
+            }
+        });
         let (mut done, mut errors) = (Vec::new(), Vec::new());
-        for p in &paths {
-            match fileops::convert_image(Path::new(p), &format, quality, |d, n| unique_path(d, n, false)) {
-                Ok(out) => done.push(out.to_string_lossy().into_owned()),
-                Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+        for (p, r) in paths.iter().zip(results.into_inner().unwrap_or_default()) {
+            match r {
+                Some(Ok(out)) => done.push(out.to_string_lossy().into_owned()),
+                Some(Err(e)) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+                None => {}
             }
         }
         (done, errors)

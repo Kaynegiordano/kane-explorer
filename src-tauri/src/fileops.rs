@@ -186,11 +186,29 @@ pub fn convert_image(
     if cur == ext || (ext == "jpg" && cur == "jpeg") {
         return Err("déjà dans ce format".into());
     }
-    let img = image::open(src).map_err(|e| format!("lecture impossible ({e})"))?;
+    let img = crate::heif::open_any(src)?;
     let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());
+    let mut data = encode(&img, ext, quality)?;
+    // Photo HEIC / AVIF : date de prise de vue, appareil, GPS… suivent (orientation remise à 1 : pixels déjà redressés)
+    if crate::heif::is_wic(src) {
+        if let Some(mut tiff) = fs::read(src).ok().and_then(|b| crate::heif::exif_from_heif(&b)) {
+            crate::heif::exif_set_upright(&mut tiff);
+            data = crate::heif::embed_exif(data, ext, &tiff);
+        }
+    }
     let out = name_for(src.parent().unwrap_or(Path::new(".")), &format!("{stem}.{ext}"));
-    fs::write(&out, encode(&img, ext, quality)?).map_err(|e| e.to_string())?;
+    fs::write(&out, data).map_err(|e| e.to_string())?;
+    keep_modified(src, &out);
     Ok(out)
+}
+
+/// La copie convertie garde la date de modification de l'original (tri par date, galeries de photos).
+fn keep_modified(src: &Path, out: &Path) {
+    if let Ok(t) = fs::metadata(src).and_then(|m| m.modified()) {
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(out) {
+            let _ = f.set_modified(t);
+        }
+    }
 }
 
 /// Copie réduite (Lanczos) : `max_side` > 0 = plus grand côté en pixels, sinon `percent`.
@@ -202,7 +220,7 @@ pub fn resize_image(
     name_for: impl Fn(&Path, &str) -> PathBuf,
 ) -> Result<PathBuf, String> {
     let bytes = fs::read(src).map_err(|e| e.to_string())?;
-    let img = image::load_from_memory(&bytes).map_err(|e| format!("lecture impossible ({e})"))?;
+    let img = if crate::heif::is_wic(src) { crate::heif::open_any(src)? } else { image::load_from_memory(&bytes).map_err(|e| format!("lecture impossible ({e})"))? };
     let (w, h) = (img.width(), img.height());
     let (nw, nh) = if max_side > 0 {
         let big = w.max(h);
@@ -218,7 +236,7 @@ pub fn resize_image(
     let small = img.resize_exact(nw, nh, image::imageops::FilterType::Lanczos3);
     let cur = lower_ext(src);
     let ext = match cur.as_str() {
-        "jpg" | "jpeg" => "jpg",
+        "jpg" | "jpeg" | "heic" | "heif" | "hif" | "avif" => "jpg",
         "webp" => "webp",
         _ => "png",
     };
@@ -229,6 +247,13 @@ pub fn resize_image(
             if let Some(d) = crate::upscale::insert_chunks(&data, &chunks) {
                 data = d;
             }
+        }
+    }
+    // Photo HEIC / AVIF réduite : la date de prise de vue, l'appareil et le GPS suivent aussi
+    if crate::heif::is_wic(src) {
+        if let Some(mut tiff) = crate::heif::exif_from_heif(&bytes) {
+            crate::heif::exif_set_upright(&mut tiff);
+            data = crate::heif::embed_exif(data, ext, &tiff);
         }
     }
     let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "image".into());

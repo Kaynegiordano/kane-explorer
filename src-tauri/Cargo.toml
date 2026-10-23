@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.11.0"
+version = "1.12.0"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
@@ -32,6 +32,7 @@ windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
   "Win32_Networking_WinSock",

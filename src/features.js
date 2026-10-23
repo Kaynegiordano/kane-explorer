@@ -406,15 +406,23 @@ async function convertFiles(list, preset) {
 
 /* ---------------- Conversion d'images native, empreintes, déblocage ---------------- */
 
-const NATIVE_IMG = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff']);
+// HEIC / HEIF / AVIF : lus par les codecs de Windows (« Extensions d'image HEIF »), EXIF des photos recopié (heif.rs)
+const NATIVE_IMG = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff', 'heic', 'heif', 'hif', 'avif']);
 
 /** Images converties par Kane lui-même (crate `image`), sans ffmpeg. Les prompts des PNG ne suivent pas : copie « pour partager ». */
 async function convertImagesNative(list, format) {
   const todo = list.filter((e) => e.ext !== format && !(format === 'jpg' && e.ext === 'jpeg'));
   if (!todo.length) { toast('Déjà dans ce format'); return; }
   toast(todo.length === 1 ? `Conversion de « ${todo[0].name} »…` : `Conversion de ${todo.length} images…`);
+  // Avancement (lots de photos) : le dernier message de la pile est mis à jour
+  const progress = els.toasts.lastElementChild;
+  const off = todo.length > 1 ? await listen('convert-progress', ({ payload: [n, total] }) => {
+    if (!progress) return;
+    progress.textContent = `Conversion : ${n} / ${total} images…`;
+    if (!progress.isConnected) els.toasts.append(progress); // reste affiché jusqu'à la fin du lot
+  }) : null;
   try {
-    const [done, errors] = await invoke('convert_images', { paths: todo.map((e) => e.path), format, quality: 92 });
+    const [done, errors] = await invoke('convert_images', { paths: todo.map((e) => e.path), format, quality: 92 }).finally(() => { off?.(); if (todo.length > 1) progress?.remove(); });
     errors.forEach((m) => toast(m, 'error'));
     if (done.length) toast(done.length === 1 ? `Créé : ${basename(done[0])}` : `${done.length} images converties`);
     const last = done[done.length - 1];
@@ -645,7 +653,7 @@ function featureItemMenu(sel, one) {
     if (sub.length) items.push({ label: 'Image et IA', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, sub) });
   }
   // Conversions (même type pour toute la sélection)
-  const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && IMG_VIEW.has(e.ext) ? 'image' : 'x')));
+  const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)) ? 'image' : 'x')));
   if (kinds.size === 1 && !kinds.has('x')) {
     const native = kinds.has('image') && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
     for (const [preset, label] of CONVERSIONS[[...kinds][0]]) {
