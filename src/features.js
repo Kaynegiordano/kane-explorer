@@ -473,6 +473,30 @@ async function openHashes(e) {
   input.focus();
 }
 
+/* ---------------- Images d'une vidéo (PNG) ---------------- */
+
+/** Première / dernière image (which = 'first' | 'last' | 'both') ou image à l'instant `time` ('at'), en PNG à côté de la vidéo. */
+async function saveVideoFrames(list, which, time) {
+  if (!kTools.ffmpeg) { showFfmpegHelp(); return; }
+  toast(list.length > 1 ? `Extraction des images de ${list.length} vidéos…` : 'Extraction de l’image…');
+  try {
+    const [done, errors] = await invoke('video_frames', { paths: list.map((e) => e.path), which, time: time ?? null });
+    errors.forEach((m) => toast(m, 'error'));
+    if (done.length) toast(done.length === 1 ? `Créé : ${basename(done[0])}` : `${done.length} images enregistrées`);
+    const last = done[done.length - 1];
+    if (last && samePath(parentOf(last), tab.path)) { await refresh(true); if (viewerEl.hidden) selectPath(last); }
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+function videoFramesMenu(sel) {
+  const many = sel.length > 1;
+  return [
+    { label: many ? 'Enregistrer la première image de chaque vidéo' : 'Enregistrer la première image', run: () => saveVideoFrames(sel, 'first') },
+    { label: many ? 'Enregistrer la dernière image de chaque vidéo' : 'Enregistrer la dernière image', run: () => saveVideoFrames(sel, 'last') },
+    { label: 'Enregistrer la première et la dernière image', run: () => saveVideoFrames(sel, 'both') },
+  ];
+}
+
 function fileToolsMenu(sel, one) {
   const items = [];
   if (one && !one.is_dir) items.push({ label: 'Empreintes (SHA-256, SHA-1, MD5)…', run: () => openHashes(one) });
@@ -651,6 +675,9 @@ function featureItemMenu(sel, one) {
     items.push({ label: 'Agrandir (IA, sans perte de netteté)…', run: () => openUpscale(sel) });
     const sub = imageAiMenu(sel, one);
     if (sub.length) items.push({ label: 'Image et IA', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, sub) });
+  }
+  if (sel.length && sel.every((e) => e.kind === 'video' && !e.virtual)) {
+    items.push({ label: 'Images de la vidéo', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, videoFramesMenu(sel)) });
   }
   // Conversions (même type pour toute la sélection)
   const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)) ? 'image' : 'x')));
@@ -851,6 +878,7 @@ function openViewer(list, i) {
       <span class="vw-title"></span><span class="vw-dims"></span><span class="vw-count"></span><span class="grow"></span>
       <button data-v="upscale" class="accent" title="Agrandir par IA, sans perte de netteté (U)">Agrandir IA</button>
       <button data-v="beforeafter" title="Comparer avec l’original, curseur avant / après (A)" hidden>Avant / après</button>
+      <button data-v="frame" class="accent" title="Enregistrer l’image affichée de la vidéo en PNG (S)" hidden>Capturer l’image</button>
       <button data-v="copy" title="Copier l’image, à coller dans Discord, Forge… (Ctrl+C) · Ctrl+Maj+C : copier le prompt">Copier</button>
       <button data-v="open" title="Ouvrir avec l’application par défaut (Entrée)">Ouvrir</button>
       <button data-v="openwith" title="Ouvrir avec un autre logiciel (O)">Ouvrir avec…</button>
@@ -869,7 +897,7 @@ function openViewer(list, i) {
     <div class="vw-main"><button class="vw-nav prev" data-v="prev">‹</button><div class="vw-stage"></div><button class="vw-nav next" data-v="next">›</button><aside class="vw-info"></aside>
       <div class="vw-zoom"><button data-v="zout" title="Zoom arrière (−)">−</button><span class="vw-pct" title="Niveau de zoom"></span><button data-v="zin" title="Zoom avant (+)">+</button><button data-v="zreal" title="Taille réelle / ajuster (Z ou double-clic)">1:1</button><button data-v="zfit" title="Ajuster à la fenêtre (F)">Ajuster</button></div></div>
     <div class="vw-strip"></div>
-    <div class="vw-help">Molette : zoom · glisser l’image : l’envoyer vers un autre logiciel (zoomée : la déplacer) · ← → image suivante · U agrandir IA · Ctrl+C copier · B fond · T miniatures · P diaporama · F11 plein écran · G garder · Suppr Corbeille · Échap fermer</div>`;
+    <div class="vw-help">Molette : zoom · glisser l’image : l’envoyer vers un autre logiciel (zoomée : la déplacer) · ← → image suivante · U agrandir IA · S capturer l’image (vidéo) · Ctrl+C copier · B fond · T miniatures · P diaporama · F11 plein écran · G garder · Suppr Corbeille · Échap fermer</div>`;
   const stage = viewerEl.querySelector('.vw-stage');
   stage.addEventListener('pointerdown', zoomPanStart);
   // (pendant un déplacement, la capture du pointeur fait de la scène la cible : on ne teste pas l'image)
@@ -1087,6 +1115,7 @@ function showViewerItem() {
   }
   viewerEl.querySelector('.vw-zoom').hidden = isVideo;
   viewerEl.querySelector('[data-v="upscale"]').hidden = !UPSCALE_EXT.has(e.ext);
+  viewerEl.querySelector('[data-v="frame"]').hidden = !isVideo;
   viewerEl.querySelector('[data-v="beforeafter"]').hidden = !findOriginal(e, [...vw.list, ...tab.items]);
   zoomApply();
   renderStrip();
@@ -1138,6 +1167,14 @@ function viewerTag(color, advance) {
   toast(color ? `Étiquette ${color}` : 'Étiquette retirée');
   if (advance && vw.i < vw.list.length - 1) vw.i++;
   showViewerItem();
+}
+
+/** Vidéo de la visionneuse : met en pause et enregistre l'image affichée (instant exact) en PNG. */
+function viewerCaptureFrame() {
+  const v = viewerEl.querySelector('.vw-stage video');
+  if (!v || vw?.mode !== 'single') return;
+  v.pause();
+  saveVideoFrames([vw.list[vw.i]], 'at', v.currentTime);
 }
 
 function viewerGo(d) {
@@ -1298,6 +1335,7 @@ viewerEl.addEventListener('click', async (ev) => {
   switch (b.dataset.v) {
     case 'close': closeViewer(); break;
     case 'goto': vw.i = k; showViewerItem(); break;
+    case 'frame': viewerCaptureFrame(); break;
     case 'swap': sliderSwap(); break;
     case 'slider': openSlider(vw.list[0], vw.list[1]); break;
     case 'beforeafter': { const e = vw.list[vw.i]; const o = findOriginal(e, [...vw.list, ...tab.items]); if (o) openSlider(o, e, { list: vw.list, i: vw.i }); break; }
@@ -1418,6 +1456,7 @@ document.addEventListener('keydown', (ev) => {
   else if (ev.key.toLowerCase() === 't') viewerEl.querySelector('[data-v="strip"]').click();
   else if (ev.key.toLowerCase() === 'p') toggleSlideshow();
   else if (ev.key.toLowerCase() === 'o') openWith(vw.list[vw.i].path);
+  else if (ev.key.toLowerCase() === 's') viewerCaptureFrame();
   else if (ev.key.toLowerCase() === 'a') viewerEl.querySelector('[data-v="beforeafter"]:not([hidden])')?.click();
   else if (ev.key.toLowerCase() === 'i') { vw.info = !vw.info; store.set('viewerInfo', vw.info); showViewerItem(); }
   else if (/^[1-6]$/.test(ev.key)) viewerTag(TAG_NAMES[+ev.key - 1], false);

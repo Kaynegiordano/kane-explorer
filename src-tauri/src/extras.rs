@@ -801,7 +801,7 @@ pub fn convert(input: &Path, preset: &str, unique: impl Fn(&Path, &str) -> PathB
         _ => return Err("Préréglage inconnu".into()),
     };
     let out = unique(dir, &format!("{stem}{suffix}"));
-    let res = quiet("ffmpeg")
+    let res = crate::video::ffmpeg()?
         .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
         .arg(input)
         .args(&args)

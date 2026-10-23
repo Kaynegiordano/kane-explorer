@@ -17,6 +17,7 @@ mod fsx;
 mod upscale;
 mod imgtools;
 mod heif;
+mod video;
 mod fileops;
 
 #[derive(Serialize)]
@@ -1533,7 +1534,7 @@ struct Tools {
 async fn tools() -> Result<Tools, String> {
     blocking(|| {
         let (a, b, c) = std::thread::scope(|s| {
-            let a = s.spawn(|| extras::tool_available("ffmpeg"));
+            let a = s.spawn(|| video::ffmpeg_path().is_some()); // PATH, sinon ffmpeg de KaneClip / Kanevas
             let b = s.spawn(|| extras::tool_available("git"));
             let c = s.spawn(|| extras::tool_available("code"));
             (a.join().unwrap_or(false), b.join().unwrap_or(false), c.join().unwrap_or(false))
@@ -1662,6 +1663,32 @@ async fn unblock_files(paths: Vec<String>) -> Result<usize, String> {
 #[tauri::command]
 async fn folder_size(path: String) -> Result<Option<(u64, u64)>, String> {
     blocking(move || fileops::folder_size(Path::new(&path))).await
+}
+
+/// Première / dernière image d'une vidéo (`which` = "first", "last", "both"), ou celle de l'instant `time` ("at"), en PNG à côté.
+#[tauri::command]
+async fn video_frames(paths: Vec<String>, which: String, time: Option<f64>) -> Result<(Vec<String>, Vec<String>), String> {
+    use video::Frame;
+    blocking(move || {
+        let frames = match which.as_str() {
+            "first" => vec![Frame::First],
+            "last" => vec![Frame::Last],
+            "both" => vec![Frame::First, Frame::Last],
+            "at" => vec![Frame::At(time.unwrap_or(0.0))],
+            _ => return Err("Image inconnue".to_string()),
+        };
+        let (mut done, mut errors) = (Vec::new(), Vec::new());
+        for p in &paths {
+            for f in &frames {
+                match video::save_frame(Path::new(p), f, |d, n| unique_path(d, n, false)) {
+                    Ok(out) => done.push(out.to_string_lossy().into_owned()),
+                    Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().map(|n| n.to_string_lossy()).unwrap_or_default())),
+                }
+            }
+        }
+        Ok((done, errors))
+    })
+    .await?
 }
 
 /// Convertit des images en JPG / PNG / WebP sans ffmpeg. Renvoie (fichiers créés, erreurs).
@@ -2083,6 +2110,7 @@ pub fn run() {
             unblock_files,
             folder_size,
             convert_images,
+            video_frames,
             resize_images,
             compare_dirs,
             create_shortcut,
