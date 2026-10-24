@@ -18,16 +18,18 @@ function peekHide() {
   peekEl = null;
 }
 
-const peekEligible = (e) => e && !e.is_dir && !e.virtual && !isCloudOnly(e) && (e.kind === 'image' || VIDEO_VIEW.has(e.ext));
+// Modèle d'IA : son image d'aperçu (modelPreview, kaneos.js)
+const peekEligible = (e) => e && !e.is_dir && !e.virtual && !isCloudOnly(e) && (e.kind === 'image' || VIDEO_VIEW.has(e.ext) || !!modelPreview(e));
 
 function peekShow(e) {
   if (peekFor !== e || !peekEligible(e)) return;
   const el = document.createElement('div');
   el.id = 'peek';
-  const isVideo = VIDEO_VIEW.has(e.ext);
+  const src = modelPreview(e) || e;
+  const isVideo = VIDEO_VIEW.has(src.ext);
   el.innerHTML = (isVideo
-    ? `<video src="${convertFileSrc(e.path)}" muted autoplay loop playsinline></video>`
-    : `<img src="${assetOrThumb(e, 720)}" alt="" draggable="false">`) +
+    ? `<video src="${convertFileSrc(src.path)}" muted autoplay loop playsinline></video>`
+    : `<img src="${assetOrThumb(src, 720)}" alt="" draggable="false">`) +
     `<div class="peek-cap"><b>${esc(e.display || e.name)}</b><span class="peek-dim"></span><span>${esc(fmtSize(e.size))}</span></div>`;
   document.body.append(el);
   peekEl = el;

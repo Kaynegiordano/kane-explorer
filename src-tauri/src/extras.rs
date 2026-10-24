@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::Hasher;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,9 +43,16 @@ pub fn cloud_only(m: &fs::Metadata) -> bool {
 
 /// Textes intégrés à une image : « parameters » (Forge / A1111)...
 pub fn image_meta(path: &Path) -> Vec<(String, String)> {
+    image_meta_with(path, false)
+}
+
+/// `quick` (lecture de tout un dossier) : un PNG dont les textes de génération précèdent l'image (Forge, A1111,
+/// ComfyUI, InvokeAI, NovelAI : tous par PIL) n'est pas lu au-delà. Kanevas, lui, les écrit après l'image :
+/// sans texte de génération avant les données, on continue jusqu'au bout. L'aperçu d'un fichier lit toujours tout.
+fn image_meta_with(path: &Path, quick: bool) -> Vec<(String, String)> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let r = match ext.as_str() {
-        "png" => png_text(path),
+        "png" => png_text(path, quick),
         "jpg" | "jpeg" => jpeg_comment(path),
         "webp" => webp_comment(path),
         _ => None,
@@ -53,9 +60,12 @@ pub fn image_meta(path: &Path) -> Vec<(String, String)> {
     r.unwrap_or_default()
 }
 
+/// Clés des textes de génération (Forge / A1111, ComfyUI, InvokeAI, NovelAI).
+const AI_KEYS: [&str; 6] = ["parameters", "prompt", "workflow", "invokeai_metadata", "sd-metadata", "Comment"];
+
 /// Lit les blocs tEXt / iTXt d'un PNG en sautant les données d'image (rapide).
-fn png_text(path: &Path) -> Option<Vec<(String, String)>> {
-    let mut f = File::open(path).ok()?;
+fn png_text(path: &Path, quick: bool) -> Option<Vec<(String, String)>> {
+    let mut f = BufReader::with_capacity(8 * 1024, File::open(path).ok()?);
     let mut sig = [0u8; 8];
     f.read_exact(&mut sig).ok()?;
     if &sig != b"\x89PNG\r\n\x1a\n" {
@@ -72,7 +82,7 @@ fn png_text(path: &Path) -> Option<Vec<(String, String)>> {
         if (kind == b"tEXt" || kind == b"iTXt") && len < 8 * 1024 * 1024 {
             let mut data = vec![0u8; len as usize];
             f.read_exact(&mut data).ok()?;
-            f.seek(SeekFrom::Current(4)).ok()?; // CRC
+            f.seek_relative(4).ok()?; // CRC
             if let Some(nul) = data.iter().position(|&b| b == 0) {
                 let key = String::from_utf8_lossy(&data[..nul]).into_owned();
                 let rest = &data[nul + 1..];
@@ -92,57 +102,71 @@ fn png_text(path: &Path) -> Option<Vec<(String, String)>> {
                 };
                 out.push((key, text));
             }
-        } else if kind == b"IEND" {
+        } else if kind == b"IEND" || (quick && kind == b"IDAT" && out.iter().any(|(k, _)| AI_KEYS.contains(&k.as_str()))) {
             break;
         } else {
-            f.seek(SeekFrom::Current(len as i64 + 4)).ok()?;
+            f.seek_relative(len as i64 + 4).ok()?;
         }
     }
     Some(out)
 }
 
-fn read_head(path: &Path, max: u64) -> Option<Vec<u8>> {
-    let mut buf = Vec::new();
-    File::open(path).ok()?.take(max).read_to_end(&mut buf).ok()?;
-    Some(buf)
-}
-
 /// JPEG : commentaire EXIF « UserComment » (format utilisé par Forge / A1111).
+/// Seuls les en-têtes de segments sont lus, jusqu'au début de l'image (quelques Ko au lieu de 512 Ko par photo).
 fn jpeg_comment(path: &Path) -> Option<Vec<(String, String)>> {
-    let d = read_head(path, 512 * 1024)?;
-    let mut i = 2;
-    while i + 4 < d.len() && d[i] == 0xFF {
-        let marker = d[i + 1];
-        let len = u16::from_be_bytes([d[i + 2], d[i + 3]]) as usize;
-        let seg = d.get(i + 4..i + 2 + len)?;
-        if marker == 0xE1 && seg.starts_with(b"Exif\0\0") {
-            return tiff_user_comment(&seg[6..]).map(|t| vec![("parameters".into(), t)]);
+    let mut f = BufReader::with_capacity(8 * 1024, File::open(path).ok()?);
+    let mut soi = [0u8; 2];
+    f.read_exact(&mut soi).ok()?;
+    if soi != [0xFF, 0xD8] {
+        return None;
+    }
+    for _ in 0..64 {
+        let mut h = [0u8; 4];
+        f.read_exact(&mut h).ok()?;
+        if h[0] != 0xFF || matches!(h[1], 0xDA | 0xD9) {
+            break; // données d'image (SOS) ou fin : plus de métadonnées après
         }
-        if marker == 0xDA {
+        let len = u16::from_be_bytes([h[2], h[3]]) as usize;
+        if len < 2 {
             break;
         }
-        i += 2 + len;
+        if h[1] == 0xE1 {
+            let mut seg = vec![0u8; len - 2];
+            f.read_exact(&mut seg).ok()?;
+            if seg.starts_with(b"Exif\0\0") {
+                return tiff_user_comment(&seg[6..]).map(|t| vec![("parameters".into(), t)]);
+            }
+        } else {
+            f.seek_relative(len as i64 - 2).ok()?;
+        }
     }
     None
 }
 
-/// WebP : bloc EXIF du conteneur RIFF.
+/// WebP : bloc EXIF du conteneur RIFF (souvent après l'image : on saute de bloc en bloc sans lire les données).
 fn webp_comment(path: &Path) -> Option<Vec<(String, String)>> {
-    let d = read_head(path, 2 * 1024 * 1024)?;
-    if d.len() < 12 || &d[..4] != b"RIFF" || &d[8..12] != b"WEBP" {
+    let mut f = BufReader::with_capacity(8 * 1024, File::open(path).ok()?);
+    let mut head = [0u8; 12];
+    f.read_exact(&mut head).ok()?;
+    if &head[..4] != b"RIFF" || &head[8..12] != b"WEBP" {
         return None;
     }
-    let mut i = 12;
-    while i + 8 <= d.len() {
-        let len = u32::from_le_bytes([d[i + 4], d[i + 5], d[i + 6], d[i + 7]]) as usize;
-        if &d[i..i + 4] == b"EXIF" {
-            let mut exif = d.get(i + 8..(i + 8 + len).min(d.len()))?;
-            if exif.starts_with(b"Exif\0\0") {
-                exif = &exif[6..];
-            }
-            return tiff_user_comment(exif).map(|t| vec![("parameters".into(), t)]);
+    for _ in 0..64 {
+        let mut c = [0u8; 8];
+        if f.read_exact(&mut c).is_err() {
+            break;
         }
-        i += 8 + len + (len & 1);
+        let len = u32::from_le_bytes([c[4], c[5], c[6], c[7]]) as usize;
+        if &c[..4] == b"EXIF" {
+            if len > 16 * 1024 * 1024 {
+                return None;
+            }
+            let mut exif = vec![0u8; len];
+            f.read_exact(&mut exif).ok()?;
+            let body = exif.strip_prefix(b"Exif\0\0").unwrap_or(&exif);
+            return tiff_user_comment(body).map(|t| vec![("parameters".into(), t)]);
+        }
+        f.seek_relative((len + (len & 1)) as i64).ok()?;
     }
     None
 }
@@ -209,7 +233,7 @@ pub fn scan_prompts(dir: &Path) -> HashMap<String, String> {
             let out = &out;
             s.spawn(move || {
                 for p in part {
-                    let text: Vec<String> = image_meta(p).into_iter().map(|(_, v)| v).collect();
+                    let text: Vec<String> = image_meta_with(p, true).into_iter().map(|(_, v)| v).collect();
                     if !text.is_empty() {
                         out.lock().unwrap().insert(p.to_string_lossy().into_owned(), text.join("\n"));
                     }
@@ -914,4 +938,93 @@ pub fn unzip_here(archive: &str) -> Result<String, String> {
         return Err(e);
     }
     Ok(dest.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Durée de la lecture des prompts d'un vrai dossier : `SCAN_DIR=… cargo test --lib mesure_scan -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn mesure_scan() {
+        let dir = std::env::var("SCAN_DIR").unwrap();
+        for essai in 1..=3 {
+            let t = std::time::Instant::now();
+            let n = scan_prompts(Path::new(&dir)).len();
+            println!("essai {essai} : {n} images avec prompt, {:?}", t.elapsed());
+        }
+        // La lecture rapide doit trouver les mêmes textes que la lecture complète
+        let rapide = scan_prompts(Path::new(&dir));
+        for e in fs::read_dir(&dir).unwrap().flatten() {
+            let complet: Vec<String> = image_meta(&e.path()).into_iter().map(|(_, v)| v).collect();
+            let key = e.path().to_string_lossy().into_owned();
+            assert_eq!(rapide.get(&key).cloned().unwrap_or_default(), complet.join("\n"), "{key}");
+        }
+    }
+
+    fn temp_file(name: &str, bytes: &[u8]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kane-meta-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    fn png_chunk(kind: &[u8], data: &[u8]) -> Vec<u8> {
+        [&(data.len() as u32).to_be_bytes()[..], kind, data, &[0, 0, 0, 0]].concat()
+    }
+
+    /// EXIF minimal (petit-boutiste) : IFD0 → sous-IFD EXIF → UserComment « ASCII\0\0\0 » + texte.
+    fn exif_with_comment(text: &str) -> Vec<u8> {
+        let comment = [&b"ASCII\0\0\0"[..], text.as_bytes()].concat();
+        let mut t = b"II*\0".to_vec();
+        t.extend_from_slice(&8u32.to_le_bytes()); // IFD0 en 8
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&[0x69, 0x87, 4, 0, 1, 0, 0, 0]);
+        t.extend_from_slice(&26u32.to_le_bytes()); // sous-IFD EXIF en 26
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.extend_from_slice(&1u16.to_le_bytes());
+        t.extend_from_slice(&[0x86, 0x92, 7, 0]);
+        t.extend_from_slice(&(comment.len() as u32).to_le_bytes());
+        t.extend_from_slice(&44u32.to_le_bytes()); // texte en 44
+        t.extend_from_slice(&0u32.to_le_bytes());
+        t.extend_from_slice(&comment);
+        t
+    }
+
+    #[test]
+    fn png_textes_avant_et_apres_l_image() {
+        let sig = b"\x89PNG\r\n\x1a\n".to_vec();
+        let png = [sig, png_chunk(b"IHDR", &[0; 13]), png_chunk(b"tEXt", b"parameters\0chat, 1girl"), png_chunk(b"IDAT", &[1; 300]),
+            png_chunk(b"tEXt", b"apres\0x"), png_chunk(b"IEND", &[])].concat();
+        let p = temp_file("a.png", &png);
+        assert_eq!(image_meta(&p), vec![("parameters".into(), "chat, 1girl".into()), ("apres".into(), "x".into())]);
+        assert_eq!(image_meta_with(&p, true), vec![("parameters".into(), "chat, 1girl".into())]); // arrêt aux données d'image
+        // Kanevas : prompt après l'image, rien avant -> lu jusqu'au bout
+        let sig = b"\x89PNG\r\n\x1a\n".to_vec();
+        let kanevas = [sig, png_chunk(b"IHDR", &[0; 13]), png_chunk(b"IDAT", &[1; 300]), png_chunk(b"IDAT", &[1; 300]),
+            png_chunk(b"iTXt", b"parameters\0\0\0\0\0chat"), png_chunk(b"IEND", &[])].concat();
+        assert_eq!(image_meta_with(&temp_file("k.png", &kanevas), true), vec![("parameters".into(), "chat".into())]);
+    }
+
+    #[test]
+    fn jpeg_commentaire_apres_d_autres_segments() {
+        let exif = [&b"Exif\0\0"[..], &exif_with_comment("Steps: 20, Seed: 42")].concat();
+        let seg = |m: u8, d: &[u8]| [&[0xFF, m][..], &((d.len() + 2) as u16).to_be_bytes(), d].concat();
+        let jpg = [&[0xFF, 0xD8][..], &seg(0xE0, b"JFIF\0\x01\x01"), &seg(0xE2, &[9; 500]), &seg(0xE1, &exif), &[0xFF, 0xDA, 0, 2], &[7; 2000]].concat();
+        let p = temp_file("a.jpg", &jpg);
+        assert_eq!(image_meta(&p), vec![("parameters".into(), "Steps: 20, Seed: 42".into())]);
+        let sans = [&[0xFF, 0xD8][..], &seg(0xE0, b"JFIF\0"), &[0xFF, 0xDA, 0, 2], &[7; 50]].concat();
+        assert!(image_meta(&temp_file("b.jpg", &sans)).is_empty());
+    }
+
+    #[test]
+    fn webp_exif_apres_l_image() {
+        let chunk = |k: &[u8], d: &[u8]| [k, &(d.len() as u32).to_le_bytes()[..], d, if d.len() % 2 == 1 { &[0][..] } else { &[][..] }].concat();
+        let body = [chunk(b"VP8X", &[0x08, 0, 0, 0, 0, 0, 0, 0, 0, 0]), chunk(b"VP8L", &[1; 4001]),
+            chunk(b"EXIF", &[&b"Exif\0\0"[..], &exif_with_comment("chat")].concat())].concat();
+        let webp = [&b"RIFF"[..], &((body.len() + 4) as u32).to_le_bytes(), b"WEBP", &body].concat();
+        assert_eq!(image_meta(&temp_file("a.webp", &webp)), vec![("parameters".into(), "chat".into())]);
+    }
 }

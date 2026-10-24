@@ -80,7 +80,7 @@ async function copyMoveTo(sel, cut) {
   const what = sel.length === 1 ? `« ${esc(sel[0].name)} »` : plural(sel.length, 'élément');
   const dest = await pickFolder(cut ? 'Déplacer vers…' : 'Copier vers…', `${cut ? 'Déplacer' : 'Copier'} ${what} dans :`);
   if (!dest) return;
-  const paths = sel.map((e) => e.path);
+  const paths = withCompanions(sel.map((e) => e.path)); // modèle d'IA + ses fichiers voisins (kaneos.js)
   try {
     const created = await pasteWithPrompt(paths, dest, cut);
     recordPaste(paths, created, cut, cut ? 'Déplacement' : 'Copie');

@@ -19,6 +19,7 @@ mod imgtools;
 mod heif;
 mod video;
 mod fileops;
+mod models;
 
 #[derive(Serialize)]
 struct Entry {
@@ -1462,7 +1463,7 @@ async fn git_status(path: String) -> Result<Option<extras::GitStatus>, String> {
     blocking(move || extras::git_status(Path::new(&path))).await
 }
 
-/// Raccourcis détectés : enregistrements OBS, Wallpaper Engine, sorties Forge.
+/// Raccourcis détectés : enregistrements OBS, Wallpaper Engine, Kane OS (créations, modèles d'IA), sorties Forge.
 #[tauri::command]
 async fn extra_places() -> Result<Vec<Place>, String> {
     blocking(|| {
@@ -1477,16 +1478,20 @@ async fn extra_places() -> Result<Vec<Place>, String> {
         for (i, p) in extras::wallpaper_engine_folders(win::steam_path()).into_iter().enumerate() {
             push(if i == 0 { "Wallpaper Engine".into() } else { format!("Wallpaper Engine ({})", i + 1) }, p, "we");
         }
-        let mut roots: Vec<PathBuf> = drive_roots().into_iter().map(PathBuf::from).collect();
-        roots.extend([dirs::home_dir(), dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir()].into_iter().flatten());
-        // Kane OS range les images de Forge dans <lecteur>:KaneOSoutputorge
-        let mut forge = extras::forge_outputs(&roots);
-        for d in drive_roots() {
-            let p = PathBuf::from(d).join("KaneOS").join("output").join("forge");
-            if p.is_dir() && !forge.contains(&p) {
-                forge.insert(0, p);
+        let drives = drive_roots();
+        // Kane OS (<lecteur>:\KaneOS) : sorties communes de Kane App (studio, animation, montage…) et pool de modèles.
+        // Les anciennes sorties de Forge (output\forge) sont dans « Créations Kane OS ».
+        let kaneos: Vec<PathBuf> = drives.iter().map(|d| PathBuf::from(d).join("KaneOS")).filter(|k| k.join("launcher").is_dir()).collect();
+        for k in &kaneos {
+            for (name, sub) in [("Créations Kane OS", "output"), ("Modèles IA", "models")] {
+                if k.join(sub).is_dir() {
+                    push(name.into(), k.join(sub), "kaneos");
+                }
             }
         }
+        let mut roots: Vec<PathBuf> = drives.into_iter().map(PathBuf::from).collect();
+        roots.extend([dirs::home_dir(), dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir()].into_iter().flatten());
+        let forge: Vec<PathBuf> = extras::forge_outputs(&roots).into_iter().filter(|p| !kaneos.iter().any(|k| p.starts_with(k))).collect();
         for (i, p) in forge.into_iter().enumerate() {
             push(if i == 0 { "Images Forge".into() } else { format!("Images Forge ({})", i + 1) }, p, "forge");
         }
@@ -1876,6 +1881,56 @@ async fn open_in_code(path: String) -> Result<(), String> {
     .await?
 }
 
+/// « Programmes et fonctionnalités » affichait encore Kane 0.5.0 (éditeur « kane ») alors que la 1.13.0 était
+/// installée : l'installateur ne réécrivait pas l'entrée. Kane la remet à jour lui-même, seulement s'il tourne
+/// depuis le dossier qu'elle désigne (jamais depuis une version de développement).
+#[cfg(windows)]
+fn fix_uninstall_entry() {
+    const KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Kane Explorer";
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let (Some(loc), Ok(exe)) = (win::reg_get(KEY, Some("InstallLocation")), std::env::current_exe()) else { return };
+    let here = exe.parent().map(|d| d.to_string_lossy().to_lowercase());
+    if here.as_deref() != Some(loc.trim_matches('"').trim_end_matches('\\').to_lowercase().as_str()) {
+        return;
+    }
+    for (name, value) in [("DisplayVersion", env!("CARGO_PKG_VERSION")), ("Publisher", "Kane")] {
+        if win::reg_get(KEY, Some(name)).as_deref() != Some(value) {
+            let _ = win::reg_set(KEY, Some(name), value);
+        }
+    }
+}
+
+/// Fiche d'un modèle d'IA (LoRA, checkpoint…) : en-tête .safetensors et fichiers voisins (models.rs).
+#[tauri::command]
+async fn model_info(path: String) -> Result<models::ModelInfo, String> {
+    blocking(move || models::model_info(Path::new(&path))).await?
+}
+
+/// Kane App (Kanevas) installé ? Lu une fois : le menu « Ouvrir dans Kane App » n'apparaît que s'il l'est.
+#[cfg(windows)]
+#[tauri::command]
+async fn kanevas_available() -> Result<bool, String> {
+    blocking(|| models::kanevas_exe().is_some()).await
+}
+
+/// Ouvre des images dans Kane App (espace Retouche). Kanevas n'a qu'une instance : s'il est ouvert, il les reçoit.
+#[cfg(windows)]
+#[tauri::command]
+async fn kanevas_open(paths: Vec<String>) -> Result<(), String> {
+    blocking(move || -> Result<(), String> {
+        let exe = models::kanevas_exe().ok_or("Kane App (Kanevas) n'est pas installé")?;
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args(&paths);
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        cmd.spawn().map(|_| ()).map_err(err)
+    })
+    .await?
+}
+
 #[cfg(windows)]
 #[tauri::command]
 async fn set_wallpaper(path: String) -> Result<(), String> {
@@ -2050,6 +2105,7 @@ pub fn run() {
                 let guard = win::reg_get(SETTINGS_KEY, Some("GuardExplorer")).map(|v| v != "0").unwrap_or(true);
                 GUARD_ON.store(guard, std::sync::atomic::Ordering::Relaxed);
                 start_explorer_guard(app.handle().clone());
+                std::thread::spawn(fix_uninstall_entry);
             }
             if background {
                 // Lancé avec Windows : aucune fenêtre, mode économe ; tout le reste démarre à la première fenêtre
@@ -2121,6 +2177,9 @@ pub fn run() {
             similar_images,
             folder_previews,
             open_in_code,
+            model_info,
+            kanevas_available,
+            kanevas_open,
             set_wallpaper,
             media_props,
             network_adapters,

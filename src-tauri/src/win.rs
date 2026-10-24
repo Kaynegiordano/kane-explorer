@@ -1172,6 +1172,32 @@ pub fn reg_delete_tree(subkey: &str) {
     }
 }
 
+/// Programmes installés pour l'utilisateur (« Programmes et fonctionnalités ») : (nom affiché, commande de désinstallation).
+pub fn uninstall_entries() -> Vec<(String, String)> {
+    use windows::Win32::System::Registry::{RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ};
+    const ROOT: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+    let mut out = Vec::new();
+    unsafe {
+        let mut key = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(ROOT), None, KEY_READ, &mut key).is_err() {
+            return out;
+        }
+        for i in 0..2000 {
+            let mut name = [0u16; 256];
+            let mut len = name.len() as u32;
+            if RegEnumKeyExW(key, i, Some(windows::core::PWSTR(name.as_mut_ptr())), &mut len, None, None, None, None).is_err() {
+                break;
+            }
+            let sub = format!("{ROOT}\\{}", String::from_utf16_lossy(&name[..len as usize]));
+            if let Some(display) = reg_get(&sub, Some("DisplayName")) {
+                out.push((display, reg_get(&sub, Some("UninstallString")).unwrap_or_default()));
+            }
+        }
+        let _ = RegCloseKey(key);
+    }
+    out
+}
+
 /// Dossier d'installation de Steam (registre).
 pub fn steam_path() -> Option<std::path::PathBuf> {
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};

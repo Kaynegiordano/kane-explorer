@@ -595,7 +595,8 @@ function setSort(key, dir) {
 function computeItems() {
   syncSort();
   const flt = parseFilter(tab.filter);
-  const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && (prefs.showProtected || !e.protected) && matchFilter(e, flt));
+  // isCompanionHidden (kaneos.js) : fichiers voisins d'un modèle d'IA regroupés sous lui
+  const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && (prefs.showProtected || !e.protected) && matchFilter(e, flt) && !isCompanionHidden(e));
   const { sortKey: k, sortDir: d } = prefs;
   list.sort((a, b) => {
     if (prefs.foldersFirst && a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
@@ -1014,17 +1015,20 @@ function openSelection() {
 
 async function doTrash() {
   if (blockedVirtual()) return;
-  const paths = selectedPaths();
-  if (!paths.length) return;
+  const shown = selectedPaths();
+  if (!shown.length) return;
+  const paths = withCompanions(shown); // un modèle d'IA part avec ses fichiers voisins (kaneos.js)
+  const extra = paths.length - shown.length;
+  const withExtra = extra ? ` (avec ${extra} fichier${extra > 1 ? 's' : ''} associé${extra > 1 ? 's' : ''})` : '';
   if (prefs.confirmDelete) {
-    const what = paths.length > 1 ? `ces ${paths.length} éléments` : `« ${basename(paths[0])} »`;
-    if (!(await confirmDialog(`Envoyer ${what} à la Corbeille ?`, 'Envoyer à la Corbeille', true))) return;
+    const what = shown.length > 1 ? `ces ${shown.length} éléments` : `« ${basename(shown[0])} »`;
+    if (!(await confirmDialog(`Envoyer ${what}${withExtra} à la Corbeille ?`, 'Envoyer à la Corbeille', true))) return;
   }
   try {
     await releaseHandles();
     if (await invoke('trash_paths', { paths })) { toast('Opération annulée'); await refresh(); return; }
-    toast(paths.length > 1 ? `${paths.length} éléments envoyés à la Corbeille` : `« ${basename(paths[0])} » envoyé à la Corbeille`);
-    pushUndo(paths.length > 1 ? `Corbeille : ${paths.length} éléments` : `Corbeille : ${basename(paths[0])}`, () => undoTrash(paths));
+    toast((shown.length > 1 ? `${shown.length} éléments envoyés à la Corbeille` : `« ${basename(shown[0])} » envoyé à la Corbeille`) + withExtra);
+    pushUndo(shown.length > 1 ? `Corbeille : ${shown.length} éléments` : `Corbeille : ${basename(shown[0])}`, () => undoTrash(paths));
   } catch (e) { toast(cleanError(e), 'error'); }
   await refresh();
 }
@@ -1032,13 +1036,14 @@ async function doTrash() {
 /** Copier / couper : passe par le presse-papiers Windows (compatible avec l'Explorateur). */
 async function doCopy(cut) {
   if (blockedVirtual()) return;
-  const paths = selectedPaths();
-  if (!paths.length) return;
+  const shown = selectedPaths();
+  if (!shown.length) return;
+  const paths = withCompanions(shown);
   try {
     await invoke('clipboard_set', { paths, cut });
     shared.cut = cut ? new Set(paths) : new Set();
     paintSelection();
-    toast(`${plural(paths.length, 'élément')} ${cut ? 'coupé' : 'copié'}${paths.length > 1 ? 's' : ''}`);
+    toast(`${plural(shown.length, 'élément')} ${cut ? 'coupé' : 'copié'}${shown.length > 1 ? 's' : ''}`);
   } catch (e) { toast(cleanError(e), 'error'); }
 }
 
@@ -1158,8 +1163,9 @@ function startRename(i) {
     if (commit && v && v !== e.name) {
       try {
         const np = await invoke('rename_entry', { path: e.path, newName: v });
+        const comp = await renameCompanions(e, np); // les fichiers voisins d'un modèle d'IA suivent (kaneos.js)
         moveTag(e.path, np); // étiquette et note suivent le fichier
-        pushUndo(`Renommage de « ${e.name} »`, async () => { await invoke('rename_entry', { path: np, newName: e.name }); moveTag(np, e.path); });
+        pushUndo(`Renommage de « ${e.name} »`, async () => { await invoke('rename_entry', { path: np, newName: e.name }); moveTag(np, e.path); await undoCompanions(comp); });
         tab.selected = new Set([np]);
         await refresh();
         tab.focus = tab.anchor = tab.items.findIndex((x) => x.path === np);
@@ -1689,7 +1695,7 @@ els.content.addEventListener('pointermove', (ev) => {
   dragStart = null;
   suppressClick = true;
   showDragBar(); // raccourcis vers les autres fenêtres Kane
-  (tab.virtual ? dragVirtual(selectedEntries()) : invoke('start_drag', { paths: selectedPaths() }))
+  (tab.virtual ? dragVirtual(selectedEntries()) : invoke('start_drag', { paths: withCompanions(selectedPaths()) }))
     .catch((err) => toast(cleanError(err), 'error'))
     .finally(() => { hideDragBar(); setTimeout(() => { suppressClick = false; }, 100); });
 });
