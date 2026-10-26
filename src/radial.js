@@ -11,12 +11,12 @@
 const RD = {
   HOLD: 350,        // ms d'appui avant l'ouverture
   SLOP: 5,          // px de mouvement qui annulent l'appui long
-  DEAD: 40,         // rayon du centre (aucune action)
-  R0: 48, R1: 134,  // anneau principal
-  MID: 92,          // icône au-dessus, nom en dessous, au milieu du secteur
-  F0: 144, F1: 222, // éventail extérieur
-  FMID: 184,
-  BOX: 236,         // demi-côté du dessin
+  DEAD: 46,         // rayon du centre (aucune action)
+  R0: 58, R1: 160,  // anneau principal
+  MID: 110,         // icône au-dessus, nom en dessous, au milieu du secteur
+  F0: 170, F1: 270, // éventail extérieur
+  FMID: 220,
+  BOX: 284,         // demi-côté du dessin
   GAP: 1.4,         // degrés entre deux secteurs
 };
 
@@ -67,6 +67,48 @@ const RD_ICONS = {
   dot: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
 };
 
+/** Familles : ouvrir (bleu), copier / déplacer (turquoise), transformer (violet), ranger / marquer (ambre), infos (ardoise), danger (rouge). */
+const RD_FAMILY = {
+  open: 'open', tab: 'open', window: 'open', with: 'open', view: 'open', play: 'open', term: 'open', code: 'open', folder: 'open', shield: 'open',
+  copy: 'move', move: 'move', cut: 'move', paste: 'move', archive: 'move', link: 'move', share: 'move', newfolder: 'move', file: 'move',
+  convert: 'edit', size: 'edit', image: 'edit', film: 'edit', wand: 'edit', rename: 'edit', music: 'edit',
+  tag: 'mark', star: 'mark', pin: 'mark', sort: 'mark', grid: 'mark', list: 'mark', all: 'mark', invert: 'mark', none: 'mark', hidden: 'mark',
+  info: 'info', more: 'info', tools: 'info', search: 'info', refresh: 'info', hash: 'info', dot: 'info',
+  trash: 'danger',
+};
+const RD_COLORS = { open: '#3b82f6', move: '#0ea5a4', edit: '#8b5cf6', mark: '#e0910f', info: '#64748b', danger: '#e5484d' };
+const rdColor = (a, parent) => a.swatch || RD_COLORS[a.danger ? 'danger' : a.family || RD_FAMILY[a.id] || (parent && (parent.family || RD_FAMILY[parent.id])) || 'info'];
+
+/** Ce que fera l'action, en clair, avec le nom de la cible (bandeau sous l'anneau). */
+function rdExplain(a) {
+  if (a.hint) return a.hint;
+  const w = rd.what;
+  const by = {
+    open: rd.sel[0]?.is_dir ? `Affiche le contenu de ${w}.` : `Ouvre ${w} avec son application habituelle.`,
+    rename: rd.sel.length > 1 ? `Renomme ${w} d’un coup (numérotation, rechercher / remplacer…).` : `Change le nom de ${w}.`,
+    trash: `Envoie ${w} à la Corbeille (récupérable, Ctrl+Z pour annuler).`,
+    tag: `Pose une étiquette de couleur ou une note en étoiles sur ${w}.`,
+    share: `Copie le chemin ou le nom, compresse en ZIP, crée un raccourci…`,
+    tools: `Propriétés de ${w}, empreintes, et toutes les autres options.`,
+    convert: `Crée une copie de ${w} dans un autre format. L’original ne bouge pas.`,
+    size: `Agrandit par IA ou réduit ${w} : une nouvelle image est créée à côté.`,
+    image: `Visionneuse, fond d’écran, prompt de génération, Kane App…`,
+    film: `Enregistre la première ou la dernière image de la vidéo en PNG.`,
+    search: rd.sel[0]?.is_dir ? `Espace occupé, doublons, images similaires dans ${w}.` : '',
+    pin: `Ajoute ${w} aux Épinglés de la barre latérale (ou l’en retire).`,
+    newfolder: 'Crée un dossier ici et propose de le nommer.',
+    paste: 'Colle ici les fichiers copiés ou coupés.',
+    list: 'Liste, icônes ou grands aperçus pour ce dossier.',
+    grid: 'Liste, icônes ou grands aperçus pour ce dossier.',
+    sort: 'Ordre des éléments de ce dossier (nom, date, taille, type).',
+    all: 'Sélectionne tout, l’inverse, ou seulement les images, vidéos, dossiers.',
+    term: 'Ouvre un terminal dans ce dossier.',
+    refresh: 'Relit le contenu du dossier.',
+    more: 'Toutes les autres options, comme le clic droit.',
+  };
+  return by[a.id] || '';
+}
+
 let rd = null;            // anneau ouvert
 let rdHold = null;        // appui en attente : { timer, x, y }
 let rdSwallow = 0;        // jusqu'à cet instant (ms), les clics sont avalés (fin du geste)
@@ -86,6 +128,8 @@ function rdConvert(sel, kind) {
   const native = kind === 'image' && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
   return CONVERSIONS[kind].map(([preset, label]) => ({
     text: preset === 'discord' ? 'Discord' : preset === 'webp' ? 'WebP' : preset.toUpperCase(), label,
+    hint: preset === 'discord' ? 'MP4 compressé sous 10 Mo, prêt pour Discord. L’original est conservé.'
+      : preset === 'mp3' ? 'Extrait le son en MP3, à côté de l’original.' : `Crée une copie en ${preset.toUpperCase()} à côté de l’original, qui est conservé.`,
     off: native && sel.every((e) => e.ext === preset || (preset === 'jpg' && e.ext === 'jpeg')),
     run: () => (native ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
   }));
@@ -105,8 +149,8 @@ function rdDestinations(sel, cut) {
   const inside = sel.filter((e) => e.is_dir).map((e) => lc(e.path));
   const list = destinationCandidates().filter((d) => !inside.some((p) => lc(d.path) === p || lc(d.path).startsWith(p + '\\'))).slice(0, 8);
   return [
-    ...list.map((d) => ({ id: d.group === 'Lecteur' ? 'archive' : 'folder', label: d.name, hint: `${d.group} · ${d.path}`, run: () => rdSendTo(sel, d.path, cut) })),
-    { id: 'search', label: 'Autre dossier…', hint: cut ? 'Déplacer vers… (F8)' : 'Copier vers… (F7)', run: () => copyMoveTo(sel, cut) },
+    ...list.map((d) => ({ id: d.group === 'Lecteur' ? 'archive' : 'folder', label: d.name, hint: `${cut ? 'Déplace' : 'Copie'} ${rd ? rd.what : 'la sélection'} dans « ${d.name} » (${d.path}).`, run: () => rdSendTo(sel, d.path, cut) })),
+    { id: 'search', label: 'Autre dossier…', hint: 'Choisir le dossier dans une liste ou coller son chemin.', run: () => copyMoveTo(sel, cut) },
   ];
 }
 
@@ -116,9 +160,9 @@ function rdMarks(sel) {
   const cur = sel.length === 1 ? tagOf(sel[0]) : null;
   const stars = sel.length === 1 ? ratingOf(sel[0]) : 0;
   return [
-    ...TAG_NAMES.map((c) => ({ swatch: TAG_COLORS[c], label: `Étiquette ${c}`, on: cur === c, run: () => setTag(paths, c) })),
+    ...TAG_NAMES.map((c) => ({ swatch: TAG_COLORS[c], label: `Étiquette ${c}`, hint: `Marque en ${c} : retrouvez-les avec la recherche « tag:${c} ».`, on: cur === c, run: () => setTag(paths, c) })),
     { id: 'none', label: 'Sans étiquette', off: !sel.some((e) => tagOf(e)), run: () => setTag(paths, null) },
-    ...[1, 2, 3, 4, 5].map((n) => ({ text: '★'.repeat(n), small: true, label: `Note : ${n} étoile${n > 1 ? 's' : ''}`, on: stars === n, run: () => setRating(paths.filter((p) => !sel.find((e) => e.path === p)?.is_dir), stars === n ? 0 : n) })),
+    ...[1, 2, 3, 4, 5].map((n) => ({ text: '★'.repeat(n), small: true, label: `${n} étoile${n > 1 ? 's' : ''}`, hint: stars === n ? 'Déjà cette note : cliquer la retire.' : `Note ${n} sur 5 (recherche « note:${n} »).`, on: stars === n, run: () => setRating(paths.filter((p) => !sel.find((e) => e.path === p)?.is_dir), stars === n ? 0 : n) })),
   ];
 }
 
@@ -177,7 +221,7 @@ function rdItemActions(sel) {
   } else if (one && isModel(one)) {
     const withInfo = (fn) => () => invoke('model_info', { path: one.path }).then(fn).catch((err) => toast(cleanError(err), 'error'));
     ctx.push({ id: 'tag', short: 'Balise', label: 'Copier la balise LoRA', run: withInfo((i) => copyText(loraTag(one, i), 'Balise copiée : collez-la dans le prompt')) });
-    ctx.push({ id: 'wand', short: 'Déclencheurs', label: 'Copier les mots déclencheurs', run: withInfo((i) => (i.trigger.length ? copyText(i.trigger.join(', '), 'Mots déclencheurs copiés') : toast('Aucun mot déclencheur connu pour ce modèle'))) });
+    ctx.push({ id: 'wand', short: 'Mots-clés', label: 'Copier les mots déclencheurs', run: withInfo((i) => (i.trigger.length ? copyText(i.trigger.join(', '), 'Mots déclencheurs copiés') : toast('Aucun mot déclencheur connu pour ce modèle'))) });
     ctx.push({ id: 'link', short: 'Civitai', label: 'Page Civitai', run: withInfo((i) => (i.civitai ? invoke('open_path', { path: i.civitai }) : toast('Pas de fiche Civitai à côté de ce modèle'))) });
   } else if (one && !one.is_dir && real && EXTRACTABLE.has(one.ext)) {
     ctx.push({ id: 'archive', short: 'Extraire', label: 'Extraire ici', run: () => extractHere(one) });
@@ -191,7 +235,7 @@ function rdItemActions(sel) {
     ] });
     ctx.push({ id: 'pin', short: isPinned(one.path) ? 'Désépingler' : 'Épingler', label: isPinned(one.path) ? 'Désépingler' : 'Épingler dans la barre latérale', run: () => togglePins([one]) });
   } else if (one && RD_EXEC.has(one.ext) && real) {
-    ctx.push({ id: 'shield', short: 'Admin', label: 'Exécuter en administrateur', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
+    ctx.push({ id: 'shield', short: 'En admin', label: 'Exécuter en administrateur', hint: 'Lance le programme avec les droits administrateur (Windows demandera l’autorisation).', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
     ctx.push({ id: 'link', short: 'Raccourci', label: 'Raccourci sur le Bureau', run: () => makeShortcuts(sel, 'desktop') });
   } else if (one && (one.kind === 'code' || isTextual(one)) && real && kTools.code) {
     ctx.push({ id: 'code', short: 'VS Code', label: 'Ouvrir dans VS Code', run: () => openCode(one.path) });
@@ -216,13 +260,13 @@ function rdItemActions(sel) {
   return [
     open,
     ...ctx.slice(0, 3),
-    { id: 'copy', short: 'Copier', label: 'Copier', hint: 'Relâcher : presse-papiers · plus loin : copier vers un dossier', run: () => doCopy(false), sub: real ? () => rdDestinations(sel, false) : null },
-    { id: 'move', short: 'Déplacer', label: 'Couper', hint: 'Relâcher : couper · plus loin : déplacer vers un dossier', run: () => doCopy(true), sub: real ? () => rdDestinations(sel, true) : null },
-    { id: 'tag', short: 'Marquer', label: 'Étiquette et note', sub: () => rdMarks(sel) },
-    { id: 'share', short: 'Partager', label: 'Copier, compresser, épingler', sub: () => share },
+    { id: 'copy', short: 'Copier', label: 'Copier', hint: 'Relâchez ici : copié dans le presse-papiers. Continuez vers l’extérieur : copié directement dans un dossier.', run: () => doCopy(false), sub: real ? () => rdDestinations(sel, false) : null },
+    { id: 'move', short: 'Déplacer', label: 'Couper', hint: 'Relâchez ici : coupé (à coller ailleurs). Continuez vers l’extérieur : déplacé directement dans un dossier.', run: () => doCopy(true), sub: real ? () => rdDestinations(sel, true) : null },
+    { id: 'tag', short: 'Marquer', label: 'Étiquette ou note', sub: () => rdMarks(sel) },
+    { id: 'share', short: 'Partager', label: 'Partager et compresser', sub: () => share },
     { id: 'rename', short: 'Renommer', label: one ? 'Renommer' : `Renommer les ${sel.length} éléments`, run: one ? renameSelection : openBatchRename },
     { id: 'trash', short: 'Corbeille', label: 'Envoyer à la Corbeille', danger: true, run: doTrash },
-    { id: 'tools', short: 'Outils', label: 'Propriétés et outils', run: () => showProperties(), sub: () => tools },
+    { id: 'tools', short: 'Infos', label: 'Propriétés et outils', run: () => showProperties(), sub: () => tools },
   ];
 }
 
@@ -278,7 +322,24 @@ const rdArc = (r0, r1, a0, a1) => {
   return `M${rdPt(r1, a0)}A${r1} ${r1} 0 ${big} 1 ${rdPt(r1, a1)}L${rdPt(r0, a1)}A${r0} ${r0} 0 ${big} 0 ${rdPt(r0, a0)}Z`;
 };
 const rdDiff = (a, b) => ((a - b + 540) % 360) - 180;
-const rdShort = (a, max = 12) => { const s = a.short || a.label; return s.length > max ? s.slice(0, max - 1) + '…' : s; };
+/** Nom d'un secteur coupé en deux lignes au plus (aux espaces), « … » au-delà. */
+function rdLines(text, max) {
+  const words = text.split(' ');
+  const lines = [''];
+  for (const w of words) {
+    const cur = lines[lines.length - 1];
+    if (!cur) lines[lines.length - 1] = w;
+    else if ((cur + ' ' + w).length <= max) lines[lines.length - 1] = cur + ' ' + w;
+    else if (lines.length < 2) lines.push(w);
+    else { lines[1] += '…'; break; }
+  }
+  return lines.map((l) => (l.length > max + 1 ? l.slice(0, max) + '…' : l));
+}
+function rdLabel(text, x, y, max) {
+  const lines = rdLines(text, max);
+  const y0 = lines.length > 1 ? y - 6 : y;
+  return `<text class="rd-lbl" x="${x}" y="${y0}">` + lines.map((l, k) => `<tspan x="${x}" dy="${k ? '1.15em' : 0}">${esc(l)}</tspan>`).join('') + '</text>';
+}
 
 /** Contenu d'un secteur : pastille de couleur, texte (« PNG ») ou icône, puis son nom. */
 function rdGlyph(a, x, y, size) {
@@ -293,13 +354,13 @@ function rdDrawMain() {
   return rd.acts.map((a, i) => {
     const c = i * step;
     const [mx0, my0] = rdPolar(RD.MID, c).map((v) => +v.toFixed(1));
-    const [ix, iy, lx, ly] = [mx0, my0 - 6, mx0, my0 + 14];
+    const [ix, iy, lx, ly] = [mx0, my0 - 11, mx0, my0 + 15];
     const [mx, my] = rdPolar(RD.R1 - 6, c).map((v) => +v.toFixed(1));
-    return `<g class="rd-seg${a.danger ? ' danger' : ''}${a.off ? ' off' : ''}${a.sub ? ' has-sub' : ''}" data-i="${i}" style="--d:${i * 16}ms">` +
+    return `<g class="rd-seg${a.danger ? ' danger' : ''}${a.off ? ' off' : ''}${a.sub ? ' has-sub' : ''}" data-i="${i}" style="--d:${i * 16}ms;--c:${rdColor(a)}">` +
       `<path class="rd-wedge" d="${rdArc(RD.R0, RD.R1, c - step / 2 + RD.GAP, c + step / 2 - RD.GAP)}"/>` +
-      rdGlyph(a, ix, iy, 22) +
-      `<text class="rd-lbl" x="${lx}" y="${ly}">${esc(rdShort(a))}</text>` +
-      (a.sub ? `<circle class="rd-more" cx="${mx}" cy="${my}" r="2.2"/>` : '') + '</g>';
+      rdGlyph(a, ix, iy, 26) +
+      rdLabel(a.short || a.label, lx, ly, 11) +
+      (a.sub ? `<path class="rd-more" d="M${rdPt(RD.R1 - 12, c - 3)}L${rdPt(RD.R1 - 5, c)}L${rdPt(RD.R1 - 12, c + 3)}Z"/>` : '') + '</g>';
   }).join('');
 }
 
@@ -314,16 +375,16 @@ function rdOpenFan(pi) {
   const items = (rd.cache[pi] ||= a.sub().slice(0, 12));
   if (!items.length) { shut(); return; }
   const m = items.length;
-  const cs = Math.min(36, 352 / m);
+  const cs = Math.min(40, 352 / m);
   const pa = pi * 360 / rd.acts.length;
   rd.fan = { parent: pi, items, cs, pa };
   layer.innerHTML = `<g class="rd-fan-in">` + items.map((c, k) => {
     const ang = pa + (k - (m - 1) / 2) * cs;
     const [fx, fy] = rdPolar(RD.FMID, ang).map((v) => +v.toFixed(1));
-    const [ix, iy, lx, ly] = [fx, fy - 7, fx, fy + 14];
-    return `<g class="rd-child${c.off ? ' off' : ''}${c.on ? ' cur' : ''}${c.danger ? ' danger' : ''}" style="--d:${Math.abs(k - (m - 1) / 2) * 18}ms">` +
+    const [ix, iy, lx, ly] = [fx, fy - 12, fx, fy + 15];
+    return `<g class="rd-child${c.off ? ' off' : ''}${c.on ? ' cur' : ''}${c.danger ? ' danger' : ''}" style="--d:${Math.abs(k - (m - 1) / 2) * 18}ms;--c:${rdColor(c, a)}">` +
       `<path class="rd-wedge" d="${rdArc(RD.F0, RD.F1, ang - cs / 2 + RD.GAP, ang + cs / 2 - RD.GAP)}"/>` +
-      (c.text || c.swatch ? rdGlyph(c, fx, fy, 22) : rdGlyph(c, ix, iy, 20) + `<text class="rd-lbl" x="${lx}" y="${ly}">${esc(rdShort(c, Math.max(10, Math.floor(cs / 2.4))))}</text>`) +
+      (c.text && !c.small ? rdGlyph(c, fx, fy, 24) : c.text ? rdGlyph(c, fx, fy - 8, 24) + rdLabel(c.label, lx, ly + 2, Math.max(9, Math.floor(cs / 2.6))) : c.swatch ? rdGlyph(c, fx, fy - 6, 28) + rdLabel(c.label.replace('Étiquette ', ''), lx, ly + 4, 12) : rdGlyph(c, ix, iy, 24) + rdLabel(c.label, lx, ly, Math.max(9, Math.floor(cs / 2.6)))) +
       (c.on ? `<circle class="rd-cur" cx="${rdPolar(RD.F1 - 9, ang)[0].toFixed(1)}" cy="${rdPolar(RD.F1 - 9, ang)[1].toFixed(1)}" r="2.6"/>` : '') + '</g>';
   }).join('') + '</g>';
   rd.el.querySelectorAll('.rd-seg').forEach((g, k) => g.classList.toggle('open', k === pi));
@@ -366,12 +427,20 @@ function rdOpen(x, y, target) {
     `<defs><radialGradient id="rd-hot" cx="0" cy="0" r="${RD.F1}" gradientUnits="userSpaceOnUse"><stop offset="0.25" class="rd-hot-a"/><stop offset="0.75" class="rd-hot-b"/></radialGradient></defs>` +
     `<g class="rd-fan"></g><g class="rd-main"></g>` +
     `<g class="rd-needle"><path d="M${rdPt(RD.R1 + 5, -9)}A${RD.R1 + 5} ${RD.R1 + 5} 0 0 1 ${rdPt(RD.R1 + 5, 9)}"/></g></svg>` +
-    `<div class="rd-hub"><div class="rd-thumb">${rdThumb(sel)}</div><b></b><span></span></div>`;
+    `<div class="rd-hub"><div class="rd-thumb">${rdThumb(sel)}</div><div class="rd-act"></div><b></b><span></span></div>`;
   document.body.append(el);
   const title = sel.length > 1 ? `${sel.length} éléments` : sel.length ? displayName(sel[0]) : (basename(tab.path) || tab.path);
   const sub = sel.length > 1 ? fmtSize(sel.reduce((s, e) => s + (e.is_dir ? 0 : e.size), 0))
     : sel.length ? (sel[0].is_dir ? 'Dossier' : `${itemType(sel[0])} · ${fmtSize(sel[0].size)}`) : `${plural(tab.items.length, 'élément')}`;
-  rd = { el, cx, cy, ox: x, oy: y, armed: Math.hypot(x - cx, y - cy) < RD.DEAD, acts, hi: -1, child: -1, fan: null, cache: {}, sticky: false, title, sub, sel };
+  const what = sel.length > 1 ? `les ${sel.length} éléments` : sel.length ? `« ${sel[0].name} »` : 'ce dossier';
+  const hud = document.createElement('div');
+  hud.id = 'rd-hud';
+  const cr = els.content.getBoundingClientRect();
+  hud.style.left = (cr.left + cr.width / 2) + 'px';
+  if (cy > cr.top + cr.height / 2) hud.style.top = (cr.top + 16) + 'px'; else hud.style.bottom = (innerHeight - cr.bottom + 16) + 'px';
+  hud.innerHTML = '<i></i><div><b></b><span></span></div><em></em>';
+  document.body.append(hud);
+  rd = { el, hud, what, cx, cy, ox: x, oy: y, armed: Math.hypot(x - cx, y - cy) < RD.DEAD, acts, hi: -1, child: -1, fan: null, cache: {}, sticky: false, title, sub, sel };
   el.querySelector('.rd-main').innerHTML = rdDrawMain();
   rdHub();
   rdSwallow = Infinity;
@@ -379,13 +448,38 @@ function rdOpen(x, y, target) {
 
 function rdHub() {
   const a = rd.child >= 0 ? rd.fan.items[rd.child] : rd.hi >= 0 ? rd.acts[rd.hi] : null;
+  const parent = rd.child >= 0 ? rd.acts[rd.hi] : null;
   const b = rd.el.querySelector('.rd-hub b'), s = rd.el.querySelector('.rd-hub span');
+  const act = rd.el.querySelector('.rd-act');
+  const color = a ? rdColor(a, parent) : '';
+  rd.el.style.setProperty('--hot', color || 'var(--accent)');
   if (a) {
-    b.textContent = a.label;
-    s.textContent = a.hint || (rd.child >= 0 ? rd.acts[rd.hi].short || rd.acts[rd.hi].label : a.sub && !a.run ? 'Choisir plus loin…' : a.sub ? 'Plus loin : d’autres choix' : '');
+    // Un format (« WebP ») est déjà écrit en grand : le centre rappelle alors l'action parente
+    b.textContent = a.short && rd.child < 0 ? a.short : a.text && parent ? (parent.short || parent.label) : a.label;
+    s.textContent = parent && !a.text ? (parent.short || parent.label) : '';
+    act.innerHTML = a.swatch ? `<i style="background:${a.swatch}"></i>` : a.text ? `<strong>${esc(a.text)}</strong>`
+      : `<svg viewBox="0 0 24 24"><path d="${RD_ICONS[a.id] || RD_ICONS.dot}"/></svg>`;
   } else {
     b.textContent = rd.title;
     s.textContent = rd.sub;
+    act.innerHTML = '';
+  }
+  // Bandeau : ce qui va se passer, et comment valider
+  const hb = rd.hud.querySelector('b'), hs = rd.hud.querySelector('span'), he = rd.hud.querySelector('em'), hi = rd.hud.querySelector('i');
+  rd.hud.style.setProperty('--hot', color || 'var(--accent)');
+  rd.hud.classList.toggle('idle', !a);
+  if (a) {
+    hb.textContent = parent ? `${parent.short || parent.label} › ${a.text && !a.small ? a.text : a.label}` : a.label;
+    hs.textContent = rdExplain(a);
+    he.textContent = a.off ? 'Indisponible ici' : !a.run ? 'Continuez vers l’extérieur pour choisir' : a.sub && rd.child < 0 ? 'Relâchez pour valider · ou continuez vers l’extérieur' : rd.sticky ? 'Cliquez pour valider' : 'Relâchez pour valider';
+    hi.innerHTML = a.swatch ? '' : `<svg viewBox="0 0 24 24"><path d="${RD_ICONS[a.id] || RD_ICONS[parent?.id] || RD_ICONS.dot}"/></svg>`;
+    hi.style.background = a.swatch || '';
+  } else {
+    hb.textContent = rd.sel.length ? rd.title : `Dossier « ${rd.title} »`;
+    hs.textContent = rd.sticky ? 'Cliquez sur une action. Échap ou clic au centre pour fermer.' : 'Sans relâcher, glissez vers une action, puis relâchez. Revenez au centre pour annuler.';
+    he.textContent = rd.sticky ? '1 à 9 · flèches · Entrée' : '';
+    hi.innerHTML = '';
+    hi.style.background = '';
   }
   rd.el.classList.toggle('hot', !!a);
   rd.el.classList.toggle('danger', !!a?.danger);
@@ -425,6 +519,9 @@ function rdTrack(x, y) {
 function rdClose(now) {
   if (!rd) return;
   const el = rd.el;
+  const hud = rd.hud;
+  hud.classList.add('out');
+  setTimeout(() => hud.remove(), now ? 0 : 160);
   rd = null;
   rdSwallow = Date.now() + 350;
   if (now || document.body.classList.contains('no-anim')) el.remove();
@@ -435,7 +532,7 @@ function rdClose(now) {
 function rdChoose(release) {
   const a = rd.child >= 0 ? rd.fan.items[rd.child] : rd.hi >= 0 ? rd.acts[rd.hi] : null;
   if (!a || a.off) {
-    if (release) { rd.sticky = true; rd.armed = true; rd.el.classList.add('sticky'); rdSwallow = Infinity; return; }
+    if (release) { rd.sticky = true; rd.armed = true; rd.el.classList.add('sticky'); rdSwallow = Infinity; rdHub(); return; }
     rdClose();
     return;
   }

@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.17.0"
+version = "1.18.0"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
