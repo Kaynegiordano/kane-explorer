@@ -534,3 +534,6 @@ body.no-anim .copy-card .cc-bar i { transition: none; }
 @keyframes rd-in { from { opacity: 0; transform: scale(.55); } to { opacity: 1; transform: scale(1); } }
 @keyframes rd-out { to { opacity: 0; transform: scale(.8); } }
 @keyframes rd-seg { from { opacity: 0; } to { opacity: 1; } }
+.rd-txt { font-size: 11px; font-weight: 700; fill: currentColor; stroke: none !important; letter-spacing: .2px; }
+.rd-seg.sub .rd-wedge { stroke: color-mix(in srgb, var(--accent) 45%, transparent); }
+#radial.back .rd-hub { box-shadow: 0 4px 16px rgba(0, 0, 0, .25), inset 0 0 0 4px color-mix(in srgb, var(--muted) 30%, transparent); cursor: pointer; }
