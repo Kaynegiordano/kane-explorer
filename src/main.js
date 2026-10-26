@@ -62,6 +62,7 @@ const prefs = {
   iconSize: store.get('iconSize', 64),               // taille des icônes en affichage grille (Ctrl + molette)
   guardExplorer: store.get('guardExplorer', true),   // les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes s'ouvrent dans Kane
   peek: store.get('peek', true),                      // grand aperçu au survol des images / vidéos
+  radial: store.get('radial', true),                  // menu circulaire à l’appui long (radial.js)
   openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
   theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
   dayFrom: store.get('dayFrom', '07:00'),            // thème « selon l'heure » : clair à partir de…
@@ -71,7 +72,7 @@ const prefs = {
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'folders', updateMode: 'notify', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, guardExplorer: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, radial: true, guardExplorer: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
 };
 
 /** Apparence : thème, couleur d'accent, densité des lignes. */
@@ -2197,6 +2198,7 @@ function openOptions() {
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
       ${check('peek', 'Grand aperçu quand la souris reste sur une image ou une vidéo')}
+      ${check('radial', 'Menu circulaire : appui long sur le bouton gauche de la souris')}
       ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
       <label class="opt"><input type="checkbox" id="opt-background"> Garder Kane prêt en arrière-plan, lancé avec Windows (sans fenêtre, très léger) : l’Explorateur Windows est remplacé même quand Kane est fermé</label>
       ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
