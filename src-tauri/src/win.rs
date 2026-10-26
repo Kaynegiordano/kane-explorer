@@ -1046,6 +1046,13 @@ pub fn run_elevated_powershell(script: &str) -> Result<()> {
     if r.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from(E_FAIL)) }
 }
 
+/// Lance un programme en administrateur (Windows affiche sa demande d'autorisation), dans son propre dossier.
+pub fn run_as_admin(path: &str) -> Result<()> {
+    let dir = std::path::Path::new(path).parent().map(|d| HSTRING::from(d.as_os_str())).unwrap_or_default();
+    let r = unsafe { ShellExecuteW(None, w!("runas"), &HSTRING::from(path), PCWSTR::null(), &dir, SW_SHOWNORMAL) };
+    if r.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from(E_FAIL)) }
+}
+
 /* ----- Réseau : détection des cartes branchées / débranchées ----- */
 
 /// Empreinte des cartes réseau matérielles (nom + état). Lecture native, instantanée :

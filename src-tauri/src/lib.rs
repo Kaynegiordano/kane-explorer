@@ -376,6 +376,13 @@ async fn drives() -> Vec<Drive> {
     .unwrap_or_default()
 }
 
+/// Menu circulaire : lance un programme en administrateur.
+#[cfg(windows)]
+#[tauri::command]
+async fn run_as_admin(path: String) -> Result<(), String> {
+    blocking(move || win::run_as_admin(&path).map_err(|_| "Lancement refusé ou impossible".to_string())).await?
+}
+
 /// Ouvre un fichier avec son application par défaut.
 #[tauri::command]
 async fn open_path(path: String) -> Result<(), String> {
@@ -2203,6 +2210,7 @@ pub fn run() {
             places,
             drives,
             open_path,
+            run_as_admin,
             reveal_path,
             open_terminal,
             rename_entry,
