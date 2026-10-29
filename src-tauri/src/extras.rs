@@ -814,7 +814,22 @@ pub fn convert(input: &Path, preset: &str, unique: impl Fn(&Path, &str) -> PathB
             "-c:v".into(), "libx264".into(), "-crf".into(), "20".into(), "-preset".into(), "medium".into(),
             "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into(), "-movflags".into(), "+faststart".into(),
         ]),
+        // H.265 : environ deux fois plus léger que H.264 à qualité égale (étiquette hvc1 : lu par Windows et les Mac)
+        "h265" => ("_h265.mp4", vec![
+            "-c:v".into(), "libx265".into(), "-crf".into(), "24".into(), "-preset".into(), "medium".into(), "-tag:v".into(), "hvc1".into(),
+            "-c:a".into(), "aac".into(), "-b:a".into(), "160k".into(), "-movflags".into(), "+faststart".into(),
+        ]),
+        "webm" => (".webm", vec![
+            "-c:v".into(), "libvpx-vp9".into(), "-crf".into(), "32".into(), "-b:v".into(), "0".into(), "-row-mt".into(), "1".into(),
+            "-c:a".into(), "libopus".into(), "-b:a".into(), "128k".into(),
+        ]),
+        // MKV : simple changement de conteneur, instantané, sans perte
+        "mkv" => (".mkv", vec!["-map".into(), "0".into(), "-c".into(), "copy".into()]),
         "mp3" => (".mp3", vec!["-vn".into(), "-c:a".into(), "libmp3lame".into(), "-q:a".into(), "2".into()]),
+        "wav" => (".wav", vec!["-vn".into(), "-c:a".into(), "pcm_s16le".into()]),
+        "flac" => (".flac", vec!["-vn".into(), "-c:a".into(), "flac".into()]),
+        "m4a" => (".m4a", vec!["-vn".into(), "-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]),
+        "opus" => (".opus", vec!["-vn".into(), "-c:a".into(), "libopus".into(), "-b:a".into(), "128k".into()]),
         "gif" => (".gif", vec![
             "-vf".into(), "fps=15,scale=480:-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse".into(),
             "-loop".into(), "0".into(),
@@ -822,6 +837,11 @@ pub fn convert(input: &Path, preset: &str, unique: impl Fn(&Path, &str) -> PathB
         "jpg" => (".jpg", vec!["-q:v".into(), "2".into()]),
         "png" => (".png", vec![]),
         "webp" => (".webp", vec!["-quality".into(), "90".into()]),
+        // AVIF (image fixe) : libaom, 2 s pour 17 Mpx ; la transparence n'est pas conservée
+        "avif" => (".avif", vec![
+            "-c:v".into(), "libaom-av1".into(), "-crf".into(), "28".into(), "-cpu-used".into(), "6".into(), "-row-mt".into(), "1".into(),
+            "-still-picture".into(), "1".into(), "-pix_fmt".into(), "yuv420p".into(),
+        ]),
         _ => return Err("Préréglage inconnu".into()),
     };
     let out = unique(dir, &format!("{stem}{suffix}"));

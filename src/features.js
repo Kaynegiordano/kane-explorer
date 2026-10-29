@@ -387,15 +387,46 @@ function openCode(path) {
   winCall('open_in_code', { path });
 }
 
+// [format, ce qu'il est, explication] : images par Kane lui-même (fileops.rs), vidéo et son par ffmpeg (extras.rs)
 const CONVERSIONS = {
-  video: [['discord', 'MP4 léger pour Discord (< 10 Mo)'], ['mp4', 'MP4 H.264 (compatible partout)'], ['mp3', 'Extraire l’audio (MP3)'], ['gif', 'GIF animé']],
-  image: [['jpg', 'Convertir en JPG'], ['png', 'Convertir en PNG'], ['webp', 'Convertir en WebP']],
-  audio: [['mp3', 'Convertir en MP3']],
+  video: [
+    ['discord', 'MP4 léger pour Discord (< 10 Mo)', 'MP4 compressé sous 10 Mo, prêt à envoyer sur Discord.'],
+    ['mp4', 'MP4 H.264, lu partout', 'La vidéo la plus compatible : téléphones, navigateurs, logiciels de montage.'],
+    ['h265', 'MP4 H.265, deux fois plus léger', 'Même qualité que le H.264 pour environ la moitié de la taille. Conversion plus lente.'],
+    ['webm', 'WebM VP9, pour le web', 'Format libre des sites web, léger. Conversion lente.'],
+    ['mkv', 'MKV, sans réencoder', 'Change seulement le conteneur : instantané, aucune perte de qualité.'],
+    ['gif', 'GIF animé', 'GIF animé de 480 px de large à 15 images par seconde.'],
+    ['mp3', 'Son seul en MP3', 'Extrait la bande son en MP3.'],
+    ['wav', 'Son seul en WAV', 'Extrait la bande son en WAV, sans compression (montage).'],
+  ],
+  image: [
+    ['jpg', 'JPG, photos, lu partout', 'Le plus compatible. La transparence devient un fond blanc.'],
+    ['png', 'PNG, sans perte', 'Aucune perte de qualité, garde la transparence. Fichier plus lourd.'],
+    ['webp', 'WebP, sans perte', 'Sans perte et plus léger que le PNG, garde la transparence.'],
+    ['avif', 'AVIF, très léger', 'Le plus léger à qualité visuelle égale (sans transparence). Lu par Windows 11 et les navigateurs récents. Demande ffmpeg.'],
+    ['gif', 'GIF, 256 couleurs', 'Image fixe en 256 couleurs (logos, pixel art).'],
+    ['bmp', 'BMP, non compressé', 'Image brute non compressée, pour les vieux logiciels.'],
+    ['tif', 'TIFF, impression', 'Sans perte, accepté par les imprimeurs et les logiciels de mise en page.'],
+    ['ico', 'ICO, icône Windows', 'Icône Windows en 16 à 256 px, l’image est centrée sur un carré.'],
+  ],
+  audio: [
+    ['mp3', 'MP3, lu partout', 'Le format de son le plus compatible.'],
+    ['m4a', 'M4A (AAC), léger', 'Plus léger que le MP3 à qualité égale (iPhone, Apple).'],
+    ['opus', 'Opus, très léger', 'Le plus léger à qualité égale (voix, Discord, web).'],
+    ['flac', 'FLAC, sans perte', 'Compression sans aucune perte de qualité.'],
+    ['wav', 'WAV, non compressé', 'Son brut, pour le montage et l’enregistrement.'],
+  ],
 };
+const convName = (p) => ({ discord: 'Discord', webp: 'WebP', h265: 'H.265', tif: 'TIFF', opus: 'Opus' })[p] || p.toUpperCase();
+// Formats d'image produits par ffmpeg (beaucoup plus rapide que l'encodeur intégré)
+const FFMPEG_IMG = new Set(['avif']);
+/** Même format (rien à convertir) ? jpg = jpeg, tif = tiff. */
+const sameFormat = (ext, p) => ext === p || (p === 'jpg' && ext === 'jpeg') || (p === 'tif' && ext === 'tiff');
 
 async function convertFiles(list, preset) {
   if (!kTools.ffmpeg) { showFfmpegHelp(); return; }
   for (const e of list) {
+    if (sameFormat(e.ext, preset)) continue;
     toast(`Conversion de « ${e.name} »…`);
     try {
       const out = await invoke('convert', { path: e.path, preset });
@@ -411,7 +442,7 @@ const NATIVE_IMG = new Set(['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', '
 
 /** Images converties par Kane lui-même (crate `image`), sans ffmpeg. Les prompts des PNG ne suivent pas : copie « pour partager ». */
 async function convertImagesNative(list, format) {
-  const todo = list.filter((e) => e.ext !== format && !(format === 'jpg' && e.ext === 'jpeg'));
+  const todo = list.filter((e) => !sameFormat(e.ext, format));
   if (!todo.length) { toast('Déjà dans ce format'); return; }
   toast(todo.length === 1 ? `Conversion de « ${todo[0].name} »…` : `Conversion de ${todo.length} images…`);
   // Avancement (lots de photos) : le dernier message de la pile est mis à jour
@@ -683,10 +714,12 @@ function featureItemMenu(sel, one) {
   const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)) ? 'image' : 'x')));
   if (kinds.size === 1 && !kinds.has('x')) {
     const native = kinds.has('image') && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
-    for (const [preset, label] of CONVERSIONS[[...kinds][0]]) {
-      if (native) items.push({ label, run: () => convertImagesNative(sel, preset) });
-      else items.push({ label: kTools.ffmpeg ? label : `${label} (ffmpeg requis)`, run: () => convertFiles(sel, preset) });
-    }
+    const conv = CONVERSIONS[[...kinds][0]].map(([preset, label]) => ({
+      label: `<b>${convName(preset)}</b> · ${label.replace(/^[^,]*, ?/, '')}`,
+      disabled: sel.every((e) => sameFormat(e.ext, preset)),
+      run: () => (native && !FFMPEG_IMG.has(preset) ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
+    }));
+    items.push({ label: native || kTools.ffmpeg ? 'Convertir en' : 'Convertir en (ffmpeg requis)', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, conv) });
   }
   if (sel.length && sel.every((e) => !e.virtual)) {
     items.push({ label: 'Outils du fichier', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, fileToolsMenu(sel, one)) });
@@ -1662,17 +1695,18 @@ function openBatchRename() {
     if (act === 'cancel') closeModal();
     if (act !== 'apply') return;
     const names = update();
-    const pairs = sel.map((e, k) => [e.path, names[k]]).filter(([p, n]) => basename(p) !== n);
+    const shown = sel.map((e, k) => [e.path, names[k]]).filter(([p, n]) => basename(p) !== n);
+    const pairs = [...shown, ...companionPairs(shown)]; // fichiers voisins des modèles d'IA (kaneos.js)
     try {
       const out = await invoke('rename_batch', { pairs });
       pairs.forEach(([from], k) => moveTag(from, out[k]));
-      pushUndo(`Renommage en lot (${out.length})`, async () => {
+      pushUndo(`Renommage en lot (${shown.length})`, async () => {
         await invoke('rename_batch', { pairs: out.map((np, k) => [np, basename(pairs[k][0])]) });
         out.forEach((np, k) => moveTag(np, pairs[k][0]));
       });
-      tab.selected = new Set(out);
+      tab.selected = new Set(out.slice(0, shown.length));
       closeModal();
-      toast(`${plural(out.length, 'élément')} renommé${out.length > 1 ? 's' : ''}`);
+      toast(`${plural(shown.length, 'élément')} renommé${shown.length > 1 ? 's' : ''}`);
       refresh();
     } catch (err) { msg.textContent = cleanError(err); }
   };

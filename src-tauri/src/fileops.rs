@@ -142,7 +142,7 @@ pub fn folder_size(dir: &Path) -> Option<(u64, u64)> {
 
 /* ---------------- Conversion et redimensionnement d'images ---------------- */
 
-/// Encode en JPG (fond blanc, pas de transparence) / PNG / WebP sans perte.
+/// Encode en JPG (fond blanc, pas de transparence) / PNG / WebP sans perte / GIF / BMP / TIFF / ICO.
 fn encode(img: &image::DynamicImage, ext: &str, quality: u8) -> Result<Vec<u8>, String> {
     use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, webp::WebPEncoder};
     use image::ImageEncoder;
@@ -161,10 +161,50 @@ fn encode(img: &image::DynamicImage, ext: &str, quality: u8) -> Result<Vec<u8>, 
             JpegEncoder::new_with_quality(&mut buf, quality.clamp(40, 100)).write_image(&rgb, w, h, image::ExtendedColorType::Rgb8)
         }
         "png" => PngEncoder::new(&mut buf).write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8),
+        "ico" => return encode_ico(&rgba),
+        // GIF : palette calculée à la vitesse 10 (la vitesse 1 par défaut prenait plus d'une minute pour 17 Mpx)
+        "gif" => image::codecs::gif::GifEncoder::new_with_speed(&mut buf, 10).encode(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8),
+        "bmp" | "tif" => {
+            let fmt = if ext == "bmp" { image::ImageFormat::Bmp } else { image::ImageFormat::Tiff };
+            image::DynamicImage::ImageRgba8(rgba).write_to(&mut std::io::Cursor::new(&mut buf), fmt)
+        }
         _ => WebPEncoder::new_lossless(&mut buf).write_image(rgba.as_raw(), w, h, image::ExtendedColorType::Rgba8),
     };
     r.map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+/// Icône Windows : 256, 64, 48, 32, 24 et 16 px, l'image centrée sur un carré transparent (Lanczos).
+fn encode_ico(rgba: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    use image::codecs::ico::{IcoEncoder, IcoFrame};
+    use image::codecs::png::PngEncoder;
+    use image::ImageEncoder;
+    // Une seule réduction coûteuse (pleine taille → 256 px de côté au plus), centrée sur un carré ; les petites tailles partent de la 256
+    let (w, h) = rgba.dimensions();
+    let k = 256.0 / w.max(h).max(1) as f64;
+    let (fw, fh) = (((w as f64 * k).round() as u32).clamp(1, 256), ((h as f64 * k).round() as u32).clamp(1, 256));
+    let fit = image::imageops::resize(rgba, fw, fh, image::imageops::FilterType::Lanczos3);
+    let mut big = image::RgbaImage::new(256, 256);
+    image::imageops::overlay(&mut big, &fit, ((256 - fw) / 2) as i64, ((256 - fh) / 2) as i64);
+    let mut frames = Vec::new();
+    for s in [256u32, 64, 48, 32, 24, 16] {
+        let small = if s == 256 { big.clone() } else { image::imageops::resize(&big, s, s, image::imageops::FilterType::Lanczos3) };
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png).write_image(small.as_raw(), s, s, image::ExtendedColorType::Rgba8).map_err(|e| e.to_string())?;
+        frames.push(IcoFrame::with_encoded(png, s, s, image::ExtendedColorType::Rgba8).map_err(|e| e.to_string())?);
+    }
+    let mut buf = Vec::new();
+    IcoEncoder::new(&mut buf).encode_images(&frames).map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+/// Formats de sortie de la conversion d'images (sans ffmpeg). L'AVIF passe par ffmpeg (libaom : 2 s pour 17 Mpx,
+/// contre 7 min pour l'encodeur Rust pur rav1e sans assembleur).
+pub const CONVERT_FORMATS: [&str; 7] = ["jpg", "png", "webp", "gif", "bmp", "tif", "ico"];
+
+/// Même format ? (jpg = jpeg, tif = tiff)
+fn same_format(cur: &str, ext: &str) -> bool {
+    cur == ext || (ext == "jpg" && cur == "jpeg") || (ext == "tif" && cur == "tiff")
 }
 
 fn lower_ext(p: &Path) -> String {
@@ -178,12 +218,11 @@ pub fn convert_image(
     quality: u8,
     name_for: impl Fn(&Path, &str) -> PathBuf,
 ) -> Result<PathBuf, String> {
-    let ext = match format {
-        "jpg" | "png" | "webp" => format,
-        _ => return Err("format inconnu".into()),
+    let Some(&ext) = CONVERT_FORMATS.iter().find(|f| **f == format) else {
+        return Err("format inconnu".into());
     };
     let cur = lower_ext(src);
-    if cur == ext || (ext == "jpg" && cur == "jpeg") {
+    if same_format(&cur, ext) {
         return Err("déjà dans ce format".into());
     }
     let img = crate::heif::open_any(src)?;
@@ -366,6 +405,22 @@ pub fn compare_dirs(a: &Path, b: &Path) -> Result<CmpResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tous_les_formats() {
+        // Dégradé 300 × 200 avec transparence
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 200, |x, y| image::Rgba([x as u8, y as u8, 128, (x / 2) as u8])));
+        for f in CONVERT_FORMATS {
+            let data = encode(&img, f, 92).unwrap_or_else(|e| panic!("{f} : {e}"));
+            assert!(data.len() > 100, "{f} vide");
+            let back = image::load_from_memory(&data).unwrap_or_else(|e| panic!("{f} illisible : {e}"));
+            let want = if f == "ico" { (256, 256) } else { (300, 200) };
+            assert_eq!((back.width(), back.height()), want, "{f}");
+        }
+        // Icône : 6 tailles
+        let ico = encode(&img, "ico", 92).unwrap();
+        assert_eq!(u16::from_le_bytes([ico[4], ico[5]]), 6);
+    }
 
     #[test]
     fn hashes_connus() {

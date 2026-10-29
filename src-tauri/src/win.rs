@@ -671,6 +671,26 @@ pub fn explorer_location(hwnd: isize) -> Option<(String, Option<String>)> {
     }
 }
 
+/// Emplacement d'une fenêtre de l'Explorateur sans chemin sur disque (Accueil, Ce PC, Corbeille…) : son nom d'analyse,
+/// « ::{GUID} » (ex. Ce PC = ::{20D04FE0-3AEA-1069-A2D8-08002B30309D}).
+pub fn explorer_virtual_id(hwnd: isize) -> Option<String> {
+    use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
+    unsafe {
+        let sw: IShellWindows = CoCreateInstance(&ShellWindows, None, CLSCTX_ALL).ok()?;
+        for i in 0..sw.Count().ok()? {
+            let Ok(disp) = sw.Item(&windows::Win32::System::Variant::VARIANT::from(i)) else { continue };
+            let Ok(wb) = disp.cast::<IWebBrowser2>() else { continue };
+            if wb.HWND().ok()?.0 as isize != hwnd {
+                continue;
+            }
+            let view: IShellFolderViewDual = wb.Document().ok()?.cast().ok()?;
+            let folder: Folder2 = view.Folder().ok()?.cast().ok()?;
+            return Some(folder.Self_().ok()?.Path().ok()?.to_string());
+        }
+        None
+    }
+}
+
 /// Ferme une fenêtre (demande polie, comme la croix).
 pub fn close_window(hwnd: isize) {
     unsafe {
@@ -1229,6 +1249,18 @@ pub fn steam_path() -> Option<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// Emplacements des fenêtres de l'Explorateur ouvertes : `cargo test fenetres_explorateur -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fenetres_explorateur() {
+        unsafe {
+            let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_APARTMENTTHREADED);
+        }
+        for h in super::explorer_hwnds() {
+            println!("{h} : {:?} / {:?}", super::explorer_location(h), super::explorer_virtual_id(h));
+        }
+    }
+
     /// Écriture / lecture / suppression dans une clé temporaire (aucune clé réelle touchée).
     #[test]
     fn registre_aller_retour() {

@@ -1145,7 +1145,8 @@ fn explorer_guard(on: bool) {
 
 /// Une nouvelle fenêtre de l'Explorateur Windows (« Afficher dans le dossier » d'un navigateur ou d'un jeu, recherche Windows, lien de dossier…)
 /// est fermée aussitôt et son dossier s'ouvre dans Kane, élément sélectionné compris. Détection par évènement système : aucune surveillance
-/// en boucle. Les fenêtres déjà ouvertes au lancement de Kane, la Corbeille et les autres dossiers virtuels ne sont pas touchés.
+/// en boucle. Accueil, Ce PC, Bibliothèques et Galerie (1.18.1, `virtual_place`) s'ouvrent aussi dans Kane. Les fenêtres déjà ouvertes
+/// au lancement de Kane, la Corbeille, le Panneau de configuration et les autres dossiers virtuels ne sont pas touchés.
 #[cfg(windows)]
 fn start_explorer_guard(app: tauri::AppHandle) {
     use std::collections::{HashMap, HashSet};
@@ -1178,7 +1179,9 @@ fn start_explorer_guard(app: tauri::AppHandle) {
                     *n += 1;
                     *n
                 };
-                match win::explorer_location(h) {
+                // Sans chemin sur disque : Accueil, Ce PC, Bibliothèques (accueil de Kane), Galerie (Images) sont repris aussi
+                let location = win::explorer_location(h).or_else(|| (attempt >= 3).then(|| win::explorer_virtual_id(h).and_then(|id| virtual_place(&id))).flatten());
+                match location {
                     // L'élément à mettre en évidence arrive un peu après la fenêtre : on patiente quelques instants
                     Some((_, None)) if attempt < 4 => {}
                     Some((path, select)) => {
@@ -1214,6 +1217,22 @@ fn start_explorer_guard(app: tauri::AppHandle) {
             }
         }
     });
+}
+
+/// Emplacement virtuel de l'Explorateur (« ::{GUID} ») que Kane sait afficher. Corbeille, Panneau de configuration,
+/// Réseau… restent à Windows.
+#[cfg(windows)]
+fn virtual_place(id: &str) -> Option<(String, Option<String>)> {
+    let guid = id.trim_start_matches("::").trim_matches(|c| c == '{' || c == '}').to_ascii_uppercase();
+    let path = match guid.as_str() {
+        "F874310E-B6B7-47DC-BC84-B9E6B38F5903" // Accueil
+        | "679F85CB-0220-4080-B29B-5540CC05AAB6" // Accès rapide (Windows 10)
+        | "20D04FE0-3AEA-1069-A2D8-08002B30309D" // Ce PC
+        | "031E4825-7B94-4DC3-B131-E946B44C8DD5" => HOME_ARG.to_string(), // Bibliothèques
+        "E88865EA-0E1C-4E20-9AA6-EDCD0212C87C" => dirs::picture_dir()?.to_string_lossy().into_owned(), // Galerie
+        _ => return None,
+    };
+    Some((path, None))
 }
 
 /// Relance Kane depuis zéro : nouveau processus puis arrêt immédiat de celui-ci (marche même si le fil principal est bloqué).

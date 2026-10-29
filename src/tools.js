@@ -210,7 +210,8 @@ function openOrganize() {
     else if (act === 'undo') { closeModal(); undoOrganize(); }
     else if (act === 'go') {
       const dir = tab.path;
-      const moves = files.map((e) => [e.path, `${dir.replace(/\\+$/, '')}\\${organizeTarget(e, mode)}\\${e.name}`]);
+      const own = files.map((e) => [e.path, `${dir.replace(/\\+$/, '')}\\${organizeTarget(e, mode)}\\${e.name}`]);
+      const moves = [...own, ...companionMoves(own)]; // un modèle d'IA part avec ses fichiers voisins (kaneos.js)
       modalBox.querySelector('[data-act="go"]').disabled = true;
       let res;
       try { res = await invoke('move_items', { moves }); }
@@ -270,7 +271,7 @@ async function zipSelection(sel) {
   const name = sel.length === 1 ? `${first.is_dir ? first.name : first.name.replace(/\.[^.]+$/, '')}.zip` : 'Archive.zip';
   const slow = setTimeout(() => toast('Compression en cours…'), 500);
   try {
-    const out = await invoke('zip_paths', { paths: sel.map((e) => e.path), zipName: name });
+    const out = await invoke('zip_paths', { paths: withCompanions(sel.map((e) => e.path)), zipName: name });
     toast(`« ${basename(out)} » créé`);
     pushUndo(`Compression « ${basename(out)} »`, () => undoCreate([out]));
     await refresh(true);

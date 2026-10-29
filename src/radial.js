@@ -117,6 +117,7 @@ let rd0 = { x: 0, y: 0 }; // point de l'appui (les menus classiques s'ouvrent l�
 /* ================= Contenu : ce que l'anneau propose ================= */
 
 const RD_EXEC = set('exe msi bat cmd com ps1 vbs');
+const RD_ADMIN = set('exe bat cmd'); // types que Windows sait lancer en administrateur (verbe « runas »)
 const cap = (s) => s[0].toUpperCase() + s.slice(1);
 
 /** Menu classique { label, run } → secteurs (étiquettes nettoyées, séparateurs et éléments inactifs retirés). */
@@ -126,12 +127,12 @@ const rdMenu = (items, id = 'dot') => (items || []).filter((m) => m && m !== '-'
 /** Conversions (features.js) : le format est écrit dans le secteur. */
 function rdConvert(sel, kind) {
   const native = kind === 'image' && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
-  return CONVERSIONS[kind].map(([preset, label]) => ({
-    text: preset === 'discord' ? 'Discord' : preset === 'webp' ? 'WebP' : preset.toUpperCase(), label,
-    hint: preset === 'discord' ? 'MP4 compressé sous 10 Mo, prêt pour Discord. L’original est conservé.'
-      : preset === 'mp3' ? 'Extrait le son en MP3, à côté de l’original.' : `Crée une copie en ${preset.toUpperCase()} à côté de l’original, qui est conservé.`,
-    off: native && sel.every((e) => e.ext === preset || (preset === 'jpg' && e.ext === 'jpeg')),
-    run: () => (native ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
+  return CONVERSIONS[kind].map(([preset, label, hint]) => ({
+    text: convName(preset), label, small: convName(preset).length > 4,
+    caption: label.replace(/^[^,]*, ?/, ''), // sous le format, dans l'éventail : « très léger », « sans perte »…
+    hint: `${hint} Une copie est créée à côté, l’original est conservé.`,
+    off: sel.every((e) => sameFormat(e.ext, preset)),
+    run: () => (native && !FFMPEG_IMG.has(preset) ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
   }));
 }
 
@@ -189,7 +190,7 @@ function rdItemActions(sel) {
     if (isViewable(one)) openAlt.push({ id: 'view', label: 'Visionneuse', run: openViewerFromSelection });
     if (kanevasReady && KANEVAS_EXT.has(one.ext)) openAlt.push({ id: 'wand', label: 'Kane App', run: () => openInKanevas([one]) });
     if (kTools.code && (one.kind === 'code' || isTextual(one))) openAlt.push({ id: 'code', label: 'VS Code', run: () => openCode(one.path) });
-    if (RD_EXEC.has(one.ext)) openAlt.push({ id: 'shield', label: 'En administrateur', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
+    if (RD_ADMIN.has(one.ext)) openAlt.push({ id: 'shield', label: 'En administrateur', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
   }
   if (!one?.is_dir) openAlt.push({ id: 'folder', label: 'Emplacement', hint: 'Ouvrir le dossier dans un nouvel onglet', off: !tab.filter && !tab.virtual, run: () => newTab(parentOf(sel[0].path), { activate: true }) });
   const open = { id: 'open', short: 'Ouvrir', label: sel.length > 1 ? `Ouvrir les ${sel.length} éléments` : 'Ouvrir', run: openSelection, sub: openAlt.length ? () => openAlt : null };
@@ -217,7 +218,7 @@ function rdItemActions(sel) {
     ctx.push({ id: 'film', short: 'Images', label: 'Images de la vidéo', sub: () => rdMenu(videoFramesMenu(sel), 'image') });
     ctx.push({ id: 'play', short: 'Lire', label: 'Lire dans la visionneuse', run: openViewerFromSelection });
   } else if (real && all('audio')) {
-    ctx.push({ id: 'convert', short: 'MP3', label: 'Convertir en MP3', run: () => convertFiles(sel, 'mp3') });
+    ctx.push({ id: 'convert', short: 'Convertir', label: 'Convertir en…', sub: () => rdConvert(sel, 'audio') });
   } else if (one && isModel(one)) {
     const withInfo = (fn) => () => invoke('model_info', { path: one.path }).then(fn).catch((err) => toast(cleanError(err), 'error'));
     ctx.push({ id: 'tag', short: 'Balise', label: 'Copier la balise LoRA', run: withInfo((i) => copyText(loraTag(one, i), 'Balise copiée : collez-la dans le prompt')) });
@@ -235,7 +236,7 @@ function rdItemActions(sel) {
     ] });
     ctx.push({ id: 'pin', short: isPinned(one.path) ? 'Désépingler' : 'Épingler', label: isPinned(one.path) ? 'Désépingler' : 'Épingler dans la barre latérale', run: () => togglePins([one]) });
   } else if (one && RD_EXEC.has(one.ext) && real) {
-    ctx.push({ id: 'shield', short: 'En admin', label: 'Exécuter en administrateur', hint: 'Lance le programme avec les droits administrateur (Windows demandera l’autorisation).', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
+    if (RD_ADMIN.has(one.ext)) ctx.push({ id: 'shield', short: 'En admin', label: 'Exécuter en administrateur', hint: 'Lance le programme avec les droits administrateur (Windows demandera l’autorisation).', run: () => invoke('run_as_admin', { path: one.path }).catch((err) => toast(cleanError(err), 'error')) });
     ctx.push({ id: 'link', short: 'Raccourci', label: 'Raccourci sur le Bureau', run: () => makeShortcuts(sel, 'desktop') });
   } else if (one && (one.kind === 'code' || isTextual(one)) && real && kTools.code) {
     ctx.push({ id: 'code', short: 'VS Code', label: 'Ouvrir dans VS Code', run: () => openCode(one.path) });
@@ -384,7 +385,7 @@ function rdOpenFan(pi) {
     const [ix, iy, lx, ly] = [fx, fy - 12, fx, fy + 15];
     return `<g class="rd-child${c.off ? ' off' : ''}${c.on ? ' cur' : ''}${c.danger ? ' danger' : ''}" style="--d:${Math.abs(k - (m - 1) / 2) * 18}ms;--c:${rdColor(c, a)}">` +
       `<path class="rd-wedge" d="${rdArc(RD.F0, RD.F1, ang - cs / 2 + RD.GAP, ang + cs / 2 - RD.GAP)}"/>` +
-      (c.text && !c.small ? rdGlyph(c, fx, fy, 24) : c.text ? rdGlyph(c, fx, fy - 8, 24) + rdLabel(c.label, lx, ly + 2, Math.max(9, Math.floor(cs / 2.6))) : c.swatch ? rdGlyph(c, fx, fy - 6, 28) + rdLabel(c.label.replace('Étiquette ', ''), lx, ly + 4, 12) : rdGlyph(c, ix, iy, 24) + rdLabel(c.label, lx, ly, Math.max(9, Math.floor(cs / 2.6)))) +
+      (c.text && !c.small && !c.caption ? rdGlyph(c, fx, fy, 24) : c.text ? rdGlyph(c, fx, fy - 8, 24) + rdLabel(c.caption || c.label, lx, ly + 2, Math.max(9, Math.floor(cs / 2.6))) : c.swatch ? rdGlyph(c, fx, fy - 6, 28) + rdLabel(c.label.replace('Étiquette ', ''), lx, ly + 4, 12) : rdGlyph(c, ix, iy, 24) + rdLabel(c.label, lx, ly, Math.max(9, Math.floor(cs / 2.6)))) +
       (c.on ? `<circle class="rd-cur" cx="${rdPolar(RD.F1 - 9, ang)[0].toFixed(1)}" cy="${rdPolar(RD.F1 - 9, ang)[1].toFixed(1)}" r="2.6"/>` : '') + '</g>';
   }).join('') + '</g>';
   rd.el.querySelectorAll('.rd-seg').forEach((g, k) => g.classList.toggle('open', k === pi));
@@ -596,19 +597,25 @@ for (const t of ['click', 'dblclick', 'auxclick']) {
 
 window.addEventListener('keydown', (ev) => {
   rdCancelHold();
-  if (!rd) return;
+  if (!rd || ['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock'].includes(ev.key)) return; // une touche seule ne ferme pas l'anneau
   ev.stopPropagation();
   ev.preventDefault();
   const n = rd.acts.length;
+  // Éventail : premier / suivant choix disponible (les choix grisés sont sautés)
+  const nextChild = (from, dir) => {
+    const m = rd.fan.items.length;
+    for (let k = 1; k <= m; k++) { const j = (from + dir * k + m * 2) % m; if (!rd.fan.items[j].off) return j; }
+    return -1;
+  };
   const setHi = (i) => { rd.hi = (i + n) % n; rd.child = -1; if (rd.acts[rd.hi].sub) rdOpenFan(rd.hi); else rdOpenFan(-1); rdHub(); };
   if (/^[1-9]$/.test(ev.key) && +ev.key <= n) { setHi(+ev.key - 1); rd.sticky = true; rd.el.classList.add('sticky'); if (!rd.acts[rd.hi].sub) rdChoose(false); return; }
   if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
     const dir = ev.key === 'ArrowRight' ? 1 : -1;
-    if (rd.child >= 0) { rd.child = (rd.child + dir + rd.fan.items.length) % rd.fan.items.length; rdHub(); } else setHi((rd.hi < 0 ? (dir > 0 ? -1 : 0) : rd.hi) + dir);
+    if (rd.child >= 0) { rd.child = nextChild(rd.child, dir); rdHub(); } else setHi((rd.hi < 0 ? (dir > 0 ? -1 : 0) : rd.hi) + dir);
     rd.sticky = true; rd.el.classList.add('sticky');
     return;
   }
-  if (ev.key === 'ArrowUp' && rd.fan) { rd.child = Math.max(0, rd.child); rdHub(); return; }
+  if (ev.key === 'ArrowUp' && rd.fan) { if (rd.child < 0) rd.child = nextChild(-1, 1); rdHub(); return; }
   if (ev.key === 'ArrowDown' && rd.child >= 0) { rd.child = -1; rdHub(); return; }
   if (ev.key === 'Enter') { rdChoose(false); return; }
   if (ev.key === 'Escape' && rd.child >= 0) { rd.child = -1; rdHub(); return; }

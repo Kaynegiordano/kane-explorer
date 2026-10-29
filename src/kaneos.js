@@ -97,6 +97,33 @@ async function undoCompanions(done) {
   for (const [p, name] of done) await invoke('rename_entry', { path: p, newName: name }).catch(() => {});
 }
 
+/** Renommage en lot : paires [chemin, nouveau nom] des fichiers voisins des modèles renommés (à ajouter au lot). */
+function companionPairs(pairs) {
+  if (!groupModels || tab.filter || tab.virtual) return [];
+  const g = modelGroups(tab);
+  if (!g.total) return [];
+  const out = [];
+  for (const [p, name] of pairs) {
+    const comp = g.of.get(p);
+    const e = comp && tab.entries.find((x) => x.path === p);
+    if (!e) continue;
+    const oldStem = modelStem(e), x = extOf(name);
+    const newStem = x ? name.slice(0, -(x.length + 1)) : name;
+    if (newStem !== oldStem) for (const c of comp) out.push([c.path, newStem + c.name.slice(oldStem.length)]);
+  }
+  return out;
+}
+
+/** Ranger : les fichiers voisins d'un modèle partent dans le même sous-dossier que lui. */
+function companionMoves(moves) {
+  if (!groupModels || tab.filter || tab.virtual) return [];
+  const g = modelGroups(tab);
+  if (!g.total) return [];
+  const out = [];
+  for (const [from, to] of moves) for (const c of g.of.get(from) || []) out.push([c.path, `${parentOf(to)}\\${c.name}`]);
+  return out;
+}
+
 function setGroupModels(on) {
   groupModels = on;
   store.set('groupModels', on);
