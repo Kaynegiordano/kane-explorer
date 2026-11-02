@@ -2198,7 +2198,7 @@ function openOptions() {
       ${check('foldersFirst', 'Afficher les dossiers avant les fichiers')}
       ${check('viewerOnOpen', 'Ouvrir les images et vidéos dans la visionneuse de Kane (← → pour naviguer)')}
       ${check('peek', 'Grand aperçu quand la souris reste sur une image ou une vidéo')}
-      ${check('radial', 'Menu circulaire : appui long sur le bouton gauche de la souris')}
+      ${check('radial', 'Menu circulaire de conversion : appui long sur une image ou une vidéo')}
       ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
       <label class="opt"><input type="checkbox" id="opt-background"> Garder Kane prêt en arrière-plan, lancé avec Windows (sans fenêtre, très léger) : l’Explorateur Windows est remplacé même quand Kane est fermé</label>
       ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}

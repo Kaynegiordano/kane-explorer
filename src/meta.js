@@ -151,7 +151,7 @@ function cellHtml(k, e) {
 
 function headCell(k, arrow) {
   const c = COLS[k];
-  return `<button data-sort="${k}" class="${c.num ? 'num' : ''}">${c.label} ${arrow(k)}<i class="resizer" data-col="${k}" title="Glisser pour redimensionner"></i></button>`;
+  return `<button data-sort="${k}" class="${c.num ? 'num' : ''}"><span class="hl">${c.label}</span>${arrow(k)}<i class="resizer" data-col="${k}" title="Glisser pour ajuster la largeur · double-clic : largeurs d’origine"></i></button>`;
 }
 
 function saveColumns() {
@@ -279,30 +279,57 @@ els.content.addEventListener('contextmenu', (ev) => {
   columnsMenu(ev.clientX, ev.clientY);
 }, true);
 
-// Redimensionner une colonne en glissant le bord gauche de son en-tête
+// Redimensionner : le séparateur entre deux colonnes suit le pointeur et répartit la largeur entre ses deux voisines (celle de gauche
+// s'élargit quand celle de droite rétrécit, et inversement) ; les autres colonnes ne bougent pas. À gauche de la première colonne
+// de données, c'est la colonne Nom qui prend ou cède la place. Double-clic sur un séparateur = largeurs d'origine de toutes les colonnes.
+const COL_MIN = 56, COL_MAX = 520, NAME_MIN = 160;
 let resizing = false;
 els.content.addEventListener('click', (ev) => {
   if (ev.target.closest('.resizer') || resizing) { ev.stopPropagation(); ev.preventDefault(); }
+}, true);
+els.content.addEventListener('dblclick', (ev) => {
+  const r = ev.target.closest('.resizer');
+  if (!r) return;
+  ev.stopPropagation();
+  kColW = {}; // toutes les largeurs d'origine (une colonne seule laisserait les autres trop larges : la dernière disparaîtrait)
+  saveColumns();
 }, true);
 els.content.addEventListener('pointerdown', (ev) => {
   const r = ev.target.closest('.resizer');
   if (!r || ev.button !== 0) return;
   ev.stopPropagation();
-  const k = r.dataset.col;
+  ev.preventDefault();
+  const right = r.dataset.col;                                 // colonne à droite du séparateur
+  const i = listCols.indexOf(right);
+  const left = i > 0 ? listCols[i - 1] : null;                 // à gauche : une colonne de données, ou Nom (null)
+  const wR = colWidth(right), wL = left ? colWidth(left) : 0;
+  const nameW = els.content.querySelector('.list-head')?.firstElementChild?.getBoundingClientRect().width || NAME_MIN;
+  // Déplacement permis du séparateur (px, vers la droite > 0) : chaque colonne reste entre COL_MIN et COL_MAX, Nom garde NAME_MIN
+  const lo = Math.min(0, Math.max(wR - COL_MAX, left ? COL_MIN - wL : NAME_MIN - nameW));
+  const hi = Math.max(0, Math.min(wR - COL_MIN, left ? COL_MAX - wL : Infinity));
   const startX = ev.clientX;
-  const startW = colWidth(k);
-  r.setPointerCapture(ev.pointerId);
+  let moved = false;
   resizing = true;
+  r.classList.add('drag');
+  document.body.classList.add('col-resizing');
+  try { r.setPointerCapture(ev.pointerId); } catch {}
   const move = (e) => {
-    kColW[k] = Math.max(48, Math.min(480, Math.round(startW - (e.clientX - startX)))); // bord gauche : tirer vers la gauche agrandit
+    const dx = Math.round(Math.max(lo, Math.min(hi, e.clientX - startX)));
+    kColW[right] = wR - dx;
+    if (left) kColW[left] = wL + dx;
+    moved = moved || dx !== 0;
     els.content.style.setProperty('--cols', colTemplate(listCols));
   };
   const up = () => {
-    r.removeEventListener('pointermove', move);
-    r.removeEventListener('pointerup', up);
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    document.body.classList.remove('col-resizing');
+    r.classList.remove('drag');
     setTimeout(() => { resizing = false; }, 50);
-    saveColumns(); // enregistre les largeurs et reconstruit l'en-tête
+    if (moved) saveColumns(); // enregistre les largeurs et reconstruit l'en-tête
   };
-  r.addEventListener('pointermove', move);
-  r.addEventListener('pointerup', up);
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 }, true);

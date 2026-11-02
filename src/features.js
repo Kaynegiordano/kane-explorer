@@ -417,7 +417,7 @@ const CONVERSIONS = {
     ['wav', 'WAV, non compressé', 'Son brut, pour le montage et l’enregistrement.'],
   ],
 };
-const convName = (p) => ({ discord: 'Discord', webp: 'WebP', h265: 'H.265', tif: 'TIFF', opus: 'Opus' })[p] || p.toUpperCase();
+const convName = (p) => ({ discord: 'Discord', webp: 'WebP', webm: 'WebM', h265: 'H.265', tif: 'TIFF', opus: 'Opus' })[p] || p.toUpperCase();
 // Formats d'image produits par ffmpeg (beaucoup plus rapide que l'encodeur intégré)
 const FFMPEG_IMG = new Set(['avif']);
 /** Même format (rien à convertir) ? jpg = jpeg, tif = tiff. */
