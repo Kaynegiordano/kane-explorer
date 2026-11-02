@@ -1,8 +1,8 @@
 'use strict';
 /* Menu circulaire (1.15.0, simplifié en 1.19.0). Appui long (≈ 0,35 s) sur le bouton gauche, sans bouger, sur une ou plusieurs
-   images ou vidéos : un anneau propose les formats de conversion (images : JPG, PNG, WebP, AVIF, GIF, BMP, TIFF, ICO ;
-   vidéos : Discord, MP4, H.265, WebM, MKV, GIF, MP3, WAV). Le geste se fait d'une traite : appuyer, glisser vers un format, relâcher.
-   Relâché au centre, l'anneau reste ouvert : cliquer un format ; Échap ou clic au centre pour fermer. Clavier : 1 à 8, ← →, Entrée, Échap.
+   images, vidéos, sons ou PDF : un anneau propose les formats de conversion (images : JPG, PNG, WebP, AVIF, GIF, BMP, TIFF, ICO, PDF ;
+   vidéos : Discord, MP4, H.265, WebM, MKV, GIF, MP3, WAV ; sons : MP3, M4A, Opus, FLAC, WAV ; PDF : PNG, JPG, WebP, une image par page). Le geste se fait d'une traite : appuyer, glisser vers un format, relâcher.
+   Relâché au centre, l'anneau reste ouvert : cliquer un format ; Échap ou clic au centre pour fermer. Clavier : 1 à 9, ← →, Entrée, Échap.
    Ailleurs (autres fichiers, dossiers, vide) rien ne change : lasso et glisser habituels.
    Option « radial » (Options → Affichage). Chargé en tout dernier (portée globale partagée avec main.js, features.js, kaneos.js…). */
 
@@ -18,30 +18,28 @@ const RD = {
 
 // Précision sous le nom du format
 const RD_CAPTION = {
-  image: { jpg: 'photos', png: 'sans perte', webp: 'léger', avif: 'très léger', gif: '256 couleurs', bmp: 'non compressé', tif: 'impression', ico: 'icône Windows' },
+  image: { jpg: 'photos', png: 'sans perte', webp: 'léger', avif: 'très léger', gif: '256 couleurs', bmp: 'non compressé', tif: 'impression', ico: 'icône Windows', pdf: 'document' },
+  audio: { mp3: 'lu partout', m4a: 'léger', opus: 'très léger', flac: 'sans perte', wav: 'son brut' },
+  pdf: { png: 'une image par page', jpg: 'léger', webp: 'sans perte, léger' },
   video: { discord: '< 10 Mo', mp4: 'lu partout', h265: '2× plus léger', webm: 'pour le web', mkv: 'sans perte', gif: 'animé', mp3: 'son seul', wav: 'son seul, brut' },
 };
+
+const RD_PLURAL = { image: 'images', video: 'vidéos', audio: 'sons', pdf: 'PDF' };
 
 let rd = null;            // anneau ouvert
 let rdHold = null;        // appui en attente : { timer, x, y }
 let rdSwallow = 0;        // jusqu'à cet instant (ms), les clics sont avalés (fin du geste)
 
-/** Ce que la sélection permet : « image » ou « video » (tous les éléments du même genre), sinon rien. */
-function rdKind(sel) {
-  if (!sel.length || sel.some((e) => e.is_dir || e.virtual)) return null;
-  if (sel.every((e) => e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)))) return 'image';
-  if (sel.every((e) => e.kind === 'video')) return 'video';
-  return null;
-}
+/** Ce que la sélection permet : image, video, audio ou pdf (tous les éléments du même genre), sinon rien (voir convKind, features.js). */
+const rdKind = convKind;
 
 /** Un secteur par format (liste CONVERSIONS de features.js) : copie créée à côté, l'original reste. */
 function rdFormats(sel, kind) {
-  const native = kind === 'image' && sel.every((e) => NATIVE_IMG.has(e.ext));
   return CONVERSIONS[kind].map(([preset]) => ({
     text: convName(preset),
     caption: RD_CAPTION[kind][preset] || '',
-    off: sel.every((e) => sameFormat(e.ext, preset)),
-    run: () => (native && !FFMPEG_IMG.has(preset) ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
+    off: convOff(sel, kind, preset),
+    run: () => runConversion(sel, kind, preset),
   }));
 }
 
@@ -87,7 +85,7 @@ function rdDraw() {
 /** Vignette du centre : l'image ou la vidéo, sinon son icône ; pastille = nombre d'éléments. */
 function rdThumb(sel) {
   const e = sel[0];
-  const img = wantsThumb(e) ? thumbUrl(e, 96) : null;
+  const img = wantsThumb(e) && e.ext !== 'pdf' ? thumbUrl(e, 96) : null; // PDF : icône (pas de miniature Windows garantie)
   return (img ? `<img src="${img}" alt="" draggable="false">` : fileIcon(e)) + (sel.length > 1 ? `<em>${sel.length}</em>` : '');
 }
 
@@ -121,7 +119,7 @@ function rdOpen(x, y, target) {
     el, cx, cy, ox: x, oy: y, hi: -1, sticky: false, sel,
     armed: Math.hypot(x - cx, y - cy) < RD.DEAD, // centre écarté du pointeur : rien n'est choisi avant un mouvement
     acts: rdFormats(sel, kind),
-    title: sel.length > 1 ? `${sel.length} ${kind === 'image' ? 'images' : 'vidéos'}` : displayName(sel[0]),
+    title: sel.length > 1 ? `${sel.length} ${RD_PLURAL[kind]}` : displayName(sel[0]),
   };
   el.querySelector('.rd-main').innerHTML = rdDraw();
   rdHub();
@@ -192,7 +190,7 @@ els.content.addEventListener('pointerdown', (ev) => {
   const r = els.content.getBoundingClientRect();
   if (ev.clientX > r.left + els.content.clientWidth || ev.clientY > r.top + els.content.clientHeight) return; // barres de défilement
   const e = tab.items[+target.dataset.i];
-  if (!e || !rdKind(tab.selected.has(e.path) ? selectedEntries() : [e])) return; // seulement images et vidéos
+  if (!e || !rdKind(tab.selected.has(e.path) ? selectedEntries() : [e])) return; // seulement images, vidéos, sons et PDF
   const x = ev.clientX, y = ev.clientY;
   rdHold = { x, y, timer: setTimeout(() => { rdHold = null; rdOpen(x, y, target); }, RD.HOLD) };
 });

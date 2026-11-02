@@ -20,6 +20,7 @@ mod heif;
 mod video;
 mod fileops;
 mod models;
+mod pdf;
 
 #[derive(Serialize)]
 struct Entry {
@@ -1722,6 +1723,33 @@ async fn video_frames(paths: Vec<String>, which: String, time: Option<f64>) -> R
     .await?
 }
 
+/// Pages de PDF en images PNG / JPG / WebP (lecteur PDF de Windows). Renvoie (fichiers ou dossiers créés, erreurs).
+#[tauri::command]
+async fn pdf_to_images(paths: Vec<String>, format: String) -> Result<(Vec<String>, Vec<String>), String> {
+    blocking(move || {
+        let (mut done, mut errors) = (Vec::new(), Vec::new());
+        for p in &paths {
+            let name_for = |d: &Path, n: &str, dir: bool| unique_path(d, n, dir);
+            match pdf::pdf_to_images(Path::new(p), &format, name_for) {
+                Ok(out) => done.push(out.to_string_lossy().into_owned()),
+                Err(e) => errors.push(format!("{} : {e}", Path::new(p).file_name().unwrap_or_default().to_string_lossy())),
+            }
+        }
+        (done, errors)
+    })
+    .await
+}
+
+/// Assemble des images en un seul PDF, une page par image. Renvoie le PDF créé.
+#[tauri::command]
+async fn images_to_pdf(paths: Vec<String>) -> Result<String, String> {
+    blocking(move || {
+        let srcs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+        pdf::images_to_pdf(&srcs, |d, n| unique_path(d, n, false)).map(|p| p.to_string_lossy().into_owned())
+    })
+    .await?
+}
+
 /// Convertit des images en JPG / PNG / WebP sans ffmpeg. Renvoie (fichiers créés, erreurs).
 #[tauri::command]
 async fn convert_images(window: WebviewWindow, paths: Vec<String>, format: String, quality: u8) -> Result<(Vec<String>, Vec<String>), String> {
@@ -2192,6 +2220,8 @@ pub fn run() {
             unblock_files,
             folder_size,
             convert_images,
+            pdf_to_images,
+            images_to_pdf,
             video_frames,
             resize_images,
             compare_dirs,

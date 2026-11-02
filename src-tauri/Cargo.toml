@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.19.0"
+version = "1.20.0"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
@@ -30,6 +30,11 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate", "def
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 windows = { version = "0.62", features = [
+  "Data_Pdf",
+  "Foundation",
+  "Storage",
+  "Storage_Streams",
+  "UI",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_Graphics_Imaging",

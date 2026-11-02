@@ -408,6 +408,12 @@ const CONVERSIONS = {
     ['bmp', 'BMP, non compressé', 'Image brute non compressée, pour les vieux logiciels.'],
     ['tif', 'TIFF, impression', 'Sans perte, accepté par les imprimeurs et les logiciels de mise en page.'],
     ['ico', 'ICO, icône Windows', 'Icône Windows en 16 à 256 px, l’image est centrée sur un carré.'],
+    ['pdf', 'PDF, document', 'Un PDF avec une page par image (plusieurs images sélectionnées : un seul PDF, dans l’ordre de la liste).'],
+  ],
+  pdf: [
+    ['png', 'PNG, sans perte', 'Une image par page, nette (192 ppp). Plusieurs pages : un dossier du nom du PDF.'],
+    ['jpg', 'JPG, léger', 'Une image par page, lue partout. Plusieurs pages : un dossier du nom du PDF.'],
+    ['webp', 'WebP, sans perte', 'Une image par page, sans perte et plus légère que le PNG. Plusieurs pages : un dossier.'],
   ],
   audio: [
     ['mp3', 'MP3, lu partout', 'Le format de son le plus compatible.'],
@@ -433,6 +439,54 @@ async function convertFiles(list, preset) {
       toast(`Créé : ${basename(out)}`);
     } catch (err) { toast(cleanError(err), 'error'); }
   }
+}
+
+/** Genre de la sélection pour les conversions (tous les éléments du même genre) : image, video, audio, pdf, sinon null. */
+function convKind(sel) {
+  if (!sel.length || sel.some((e) => e.is_dir || e.virtual)) return null;
+  if (sel.every((e) => e.kind === 'video')) return 'video';
+  if (sel.every((e) => e.kind === 'audio')) return 'audio';
+  if (sel.every((e) => e.ext === 'pdf')) return 'pdf';
+  if (sel.every((e) => e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)))) return 'image';
+  return null;
+}
+
+/** Rien à faire pour ce format ? (déjà dans ce format ; PDF : seulement les images que Kane sait lire) */
+const convOff = (sel, kind, preset) => sel.every((e) => sameFormat(e.ext, preset)) || (kind === 'image' && preset === 'pdf' && !sel.every((e) => NATIVE_IMG.has(e.ext)));
+
+/** Lance la conversion `preset` d'une sélection de ce genre (menu « Convertir en » et menu circulaire). */
+function runConversion(sel, kind, preset) {
+  if (kind === 'pdf') return convertPdfPages(sel, preset);
+  if (kind === 'image' && preset === 'pdf') return imagesToPdf(sel);
+  const native = kind === 'image' && sel.every((e) => NATIVE_IMG.has(e.ext));
+  return native && !FFMPEG_IMG.has(preset) ? convertImagesNative(sel, preset) : convertFiles(sel, preset);
+}
+
+/** Affiche le fichier ou le dossier le plus récent (s'il est dans le dossier affiché) et le sélectionne. */
+async function showCreated(done) {
+  const last = done[done.length - 1];
+  if (last && samePath(parentOf(last), tab.path)) { await refresh(true); selectPath(last); }
+}
+
+/** PDF en images : une page = un fichier, plusieurs pages = un dossier du nom du PDF (lecteur PDF de Windows, pdf.rs). */
+async function convertPdfPages(list, format) {
+  toast(list.length === 1 ? `Conversion de « ${list[0].name} »…` : `Conversion de ${list.length} PDF…`);
+  try {
+    const [done, errors] = await invoke('pdf_to_images', { paths: list.map((e) => e.path), format });
+    errors.forEach((m) => toast(m, 'error'));
+    if (done.length) toast(done.length === 1 ? `Créé : ${basename(done[0])}` : `${done.length} éléments créés`);
+    await showCreated(done);
+  } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+/** Images en un seul PDF (une page par image, dans l'ordre de la liste). */
+async function imagesToPdf(list) {
+  toast(list.length === 1 ? `Création du PDF de « ${list[0].name} »…` : `Création d’un PDF de ${list.length} images…`);
+  try {
+    const out = await invoke('images_to_pdf', { paths: list.map((e) => e.path) });
+    toast(`Créé : ${basename(out)}`);
+    await showCreated([out]);
+  } catch (err) { toast(cleanError(err), 'error'); }
 }
 
 /* ---------------- Conversion d'images native, empreintes, déblocage ---------------- */
@@ -711,15 +765,15 @@ function featureItemMenu(sel, one) {
     items.push({ label: 'Images de la vidéo', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, videoFramesMenu(sel)) });
   }
   // Conversions (même type pour toute la sélection)
-  const kinds = new Set(sel.map((e) => (e.kind === 'video' ? 'video' : e.kind === 'audio' ? 'audio' : e.kind === 'image' && (IMG_VIEW.has(e.ext) || NATIVE_IMG.has(e.ext)) ? 'image' : 'x')));
-  if (kinds.size === 1 && !kinds.has('x')) {
-    const native = kinds.has('image') && sel.every((e) => NATIVE_IMG.has(e.ext) && !e.virtual);
-    const conv = CONVERSIONS[[...kinds][0]].map(([preset, label]) => ({
+  const kind = convKind(sel);
+  if (kind) {
+    const needsFfmpeg = kind === 'video' || kind === 'audio';
+    const conv = CONVERSIONS[kind].map(([preset, label]) => ({
       label: `<b>${convName(preset)}</b> · ${label.replace(/^[^,]*, ?/, '')}`,
-      disabled: sel.every((e) => sameFormat(e.ext, preset)),
-      run: () => (native && !FFMPEG_IMG.has(preset) ? convertImagesNative(sel, preset) : convertFiles(sel, preset)),
+      disabled: convOff(sel, kind, preset),
+      run: () => runConversion(sel, kind, preset),
     }));
-    items.push({ label: native || kTools.ffmpeg ? 'Convertir en' : 'Convertir en (ffmpeg requis)', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, conv) });
+    items.push({ label: !needsFfmpeg || kTools.ffmpeg ? 'Convertir en' : 'Convertir en (ffmpeg requis)', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, conv) });
   }
   if (sel.length && sel.every((e) => !e.virtual)) {
     items.push({ label: 'Outils du fichier', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, fileToolsMenu(sel, one)) });

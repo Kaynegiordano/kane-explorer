@@ -143,7 +143,7 @@ pub fn folder_size(dir: &Path) -> Option<(u64, u64)> {
 /* ---------------- Conversion et redimensionnement d'images ---------------- */
 
 /// Encode en JPG (fond blanc, pas de transparence) / PNG / WebP sans perte / GIF / BMP / TIFF / ICO.
-fn encode(img: &image::DynamicImage, ext: &str, quality: u8) -> Result<Vec<u8>, String> {
+pub(crate) fn encode(img: &image::DynamicImage, ext: &str, quality: u8) -> Result<Vec<u8>, String> {
     use image::codecs::{jpeg::JpegEncoder, png::PngEncoder, webp::WebPEncoder};
     use image::ImageEncoder;
     let mut buf = Vec::new();
