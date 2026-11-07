@@ -292,7 +292,8 @@ async function navigateLoad(path, id, { push, t, select }) {
     t.hIndex = t.history.length - 1;
   }
   noteVisit(path); // dossiers récents de la palette (palette.js)
-  Object.assign(t, { path, entries, virtual, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
+  if (t.deep?.running) invoke('search_cancel', { job: t.deep.job }).catch(() => {}); // recherche dans les sous-dossiers (search.js)
+  Object.assign(t, { path, entries, virtual, deep: null, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
   if (t === tab) {
     els.search.value = '';
     watchCurrent();
@@ -320,6 +321,7 @@ async function refresh(force = false) {
   const t = tab;
   if (t.path === HOME) { await loadSidebar(); render(); return true; }
   if (t.navPending) return true; // une navigation est en cours : elle chargera un contenu à jour
+  if (t.deep) return deepRefresh(t, force); // résultats d'une recherche dans les sous-dossiers (search.js)
   const id = ++t.loadId;
   let entries;
   try { entries = prepare(t.virtual ? await loadArchive(t.virtual, true) : await invoke('list_dir', { path: t.path })); }
@@ -673,7 +675,8 @@ function renderFiles(animate = true, deferWindow = false) {
   if (!tab.loaded) { els.content.innerHTML = ''; return; }
   if (!tab.items.length) {
     els.content.innerHTML = tab.filter
-      ? `<div class="empty"><div><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><p>Aucun résultat pour « ${esc(tab.filter)} »</p></div></div>`
+      ? `<div class="empty"><div><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><p>${tab.deep?.running ? 'Recherche dans les sous-dossiers…' : `Aucun résultat pour « ${esc(tab.filter)} »`}</p>` +
+        (!tab.deep && !tab.virtual ? '<p class="empty-hint">Entrée : chercher aussi dans tous les sous-dossiers</p>' : '') + '</div></div>'
       : `<div class="empty"><div><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><p>Ce dossier est vide</p></div></div>`;
     return;
   }
@@ -843,6 +846,7 @@ function renderChrome() {
   markActive();
   if (typeof renderAiBar === 'function') renderAiBar(); // filtres IA (studio.js)
   if (typeof syncSaveBtn === 'function') syncSaveBtn(); // bouton « Enregistrer la recherche » (search.js)
+  if (typeof renderDeepBar === 'function') renderDeepBar(); // bandeau « Chercher dans les sous-dossiers » (search.js)
 
   els.back.disabled = tab.hIndex <= 0;
   els.forward.disabled = tab.hIndex >= tab.history.length - 1;
@@ -1068,7 +1072,7 @@ async function doPaste() {
     created = await pasteWithPrompt(clip.paths, tab.path, clip.cut);
     if (clip.cut) { shared.cut = new Set(); invoke('clipboard_clear').catch(() => {}); }
     tab.selected = new Set(created);
-    toast(`${plural(created.length, 'élément')} ${clip.cut ? 'déplacé' : 'collé'}${created.length > 1 ? 's' : ''}`);
+    toast(pastedText(created, clip.cut ? 'déplacé' : 'collé'));
     recordPaste(clip.paths, created, clip.cut, clip.cut ? 'Déplacement' : 'Collage');
   } catch (e) { toast(cleanError(e), 'error'); }
   await refresh();
@@ -1121,6 +1125,12 @@ function askConflicts(conflicts, move) {
   });
 }
 
+/** Message après un collage : « 3 éléments copiés vers… », ou rien de fait si tout a été ignoré. */
+function pastedText(created, verb, where = '') {
+  const n = created.length;
+  return n ? `${plural(n, 'élément')} ${verb}${n > 1 ? 's' : ''}${where}` : `Aucun élément ${verb} : tout a été ignoré`;
+}
+
 /** Colle / copie / déplace en réglant d'abord, dans Kane, les éléments déjà présents à la destination. */
 async function pasteWithPrompt(paths, dest, cut) {
   let decisions = {};
@@ -1129,7 +1139,9 @@ async function pasteWithPrompt(paths, dest, cut) {
     decisions = await askConflicts(conflicts, cut);
     if (!decisions) throw new Error('Opération annulée');
   }
-  return invoke('paste', { paths, dest, cut, decisions });
+  // Résultat : les éléments créés ou modifiés (tableau habituel), plus de quoi annuler exactement (undo.js)
+  const res = await invoke('paste', { paths, dest, cut, decisions });
+  return Object.assign(res.items, { ops: res.ops, replaced: res.replaced });
 }
 
 async function doNewFolder() {
@@ -1547,12 +1559,39 @@ els.address.addEventListener('auxclick', (ev) => {
 els.addressInput.addEventListener('keydown', async (ev) => {
   if (ev.key === 'Escape') { closeAddress(); els.content.focus(); }
   if (ev.key !== 'Enter') return;
-  let p = els.addressInput.value.trim().replace(/\//g, '\\').replace(/^"|"$/g, '');
-  if (/^[A-Za-z]:$/.test(p)) p += '\\';
+  const typed = els.addressInput.value.trim().replace(/^"|"$/g, '');
   closeAddress();
-  await navigate(p || HOME);
+  // Adresse web : ouverte dans le navigateur, comme dans l'Explorateur
+  if (/^(https?:\/\/|www\.)/i.test(typed)) { winCall('open_path', { path: /^www\./i.test(typed) ? 'https://' + typed : typed }); return; }
+  const p = await resolveAddress(typed);
+  // Chemin d'un fichier (collé depuis un message, un journal…) : son dossier s'ouvre, le fichier sélectionné
+  const st = p ? (await invoke('path_states', { paths: [p] }).catch(() => [2]))[0] : 2;
+  if (st === 1 && !(prefs.openArchives && isBrowsableArchive({ is_dir: false, ext: extOf(p) }))) await navigate(parentOf(p) || HOME, { select: p });
+  else await navigate(p || HOME);
   els.content.focus();
 });
+
+/** Ce qui est tapé dans la barre d'adresse → chemin : %APPDATA% et autres variables, ~ (dossier personnel),
+    chemin relatif au dossier affiché (« Images », « ..\\Autre »), barres obliques. */
+async function resolveAddress(text) {
+  let p = text.replace(/\//g, '\\');
+  if (!p) return '';
+  if (/%[^%\\]+%|^~(\\|$)/.test(p)) p = await invoke('expand_path', { path: p }).catch(() => p);
+  if (/^[A-Za-z]:$/.test(p)) return p + '\\';
+  if (!/^[A-Za-z]:\\|^\\\\/.test(p)) {
+    if (tab.path === HOME) return p;
+    p = tab.path.replace(/\\+$/, '') + '\\' + p;
+  }
+  // « . » et « .. »
+  const m = p.match(/^([A-Za-z]:|\\\\[^\\]+\\[^\\]+)(.*)$/);
+  if (!m) return p;
+  const parts = [];
+  for (const s of m[2].split('\\')) {
+    if (!s || s === '.') continue;
+    if (s === '..') parts.pop(); else parts.push(s);
+  }
+  return m[1] + '\\' + parts.join('\\');
+}
 els.addressInput.addEventListener('blur', closeAddress);
 
 /* ---------------- Menu contextuel ---------------- */
@@ -1593,6 +1632,7 @@ function itemMenu() {
     one?.is_dir && { label: 'Ouvrir dans une nouvelle fenêtre', run: () => winCall('new_window', { path: one.path }) },
     one && !one.is_dir && { label: 'Ouvrir avec…', run: () => openWith(one.path) },
     one?.is_dir && { label: 'Ouvrir dans le Terminal', run: () => openTerminal(one.path) },
+    tab.deep && one && { label: 'Ouvrir l’emplacement', run: () => navigate(parentOf(one.path), { select: one.path }) }, // résultat d'une recherche (search.js)
     '-',
     { label: 'Couper', kbd: 'Ctrl+X', run: () => doCopy(true) },
     { label: 'Copier', kbd: 'Ctrl+C', run: () => doCopy(false) },
@@ -1885,7 +1925,7 @@ async function dropInto(paths, dest) {
   if (!todo.length) return;
   try {
     const created = await pasteWithPrompt(todo, dest, move);
-    toast(`${plural(created.length, 'élément')} ${move ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} vers « ${basename(dest) || dest} »`);
+    toast(pastedText(created, move ? 'déplacé' : 'copié', ` vers « ${basename(dest) || dest} »`));
     recordPaste(todo, created, move, move ? 'Déplacement' : 'Copie');
     if (samePath(dest, tab.path)) tab.selected = new Set(created);
   } catch (e) { toast(cleanError(e), 'error'); }

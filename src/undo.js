@@ -33,38 +33,33 @@ async function undoTrash(paths) {
 async function undoCreate(paths) {
   const existing = await invoke('path_states', { paths });
   const todo = paths.filter((_, i) => existing[i] !== 0);
-  if (todo.length) await invoke('trash_paths', { paths: todo });
+  if (todo.length && await invoke('trash_paths', { paths: todo })) throw new Error('Annulation interrompue');
 }
 
-/** Remet des éléments déplacés à leur place d'origine. pairs : [[chemin d'origine, chemin actuel]]. */
-async function undoMoves(pairs) {
-  const byDir = new Map();
-  for (const [from, to] of pairs) {
-    const d = parentOf(from);
-    if (!byDir.has(d)) byDir.set(d, []);
-    byDir.get(d).push(to);
+/** Annule une copie ou une extraction (résultat de pasteWithPrompt) : seuls les éléments copiés partent à la Corbeille
+    (jamais ce qui était déjà là : éléments ignorés, contenu d'origine d'un dossier fusionné), et les fichiers qu'ils
+    avaient remplacés en reviennent. */
+async function undoCopies(created) {
+  if (!created.ops) return undoCreate([...created]);
+  await undoCreate(created.ops.map(([, to]) => to));
+  if (created.replaced?.length) {
+    // La copie vient de partir à la Corbeille : la version d'avant y est l'avant-dernière de ce nom
+    const back = await invoke('trash_restore', { paths: created.replaced, skip: 1 });
+    if (back.length < created.replaced.length) throw new Error(`${created.replaced.length - back.length} fichier(s) remplacé(s) introuvable(s) dans la Corbeille`);
   }
-  for (const [dir, list] of byDir) await invoke('paste', { paths: list, dest: dir, cut: true });
 }
 
-/** Associe les éléments créés par un collage / déplacement à leur source (même nom). */
-function pairByName(sources, created) {
-  const pairs = [];
-  for (const c of created) {
-    const n = basename(c).toLowerCase();
-    const s = sources.find((x) => basename(x).toLowerCase() === n);
-    if (s) pairs.push([s, c]);
-  }
-  return pairs;
+/** Annule un déplacement : chaque élément revient exactement à sa place et sous son nom ; les fichiers remplacés reviennent de la Corbeille. */
+async function undoMoves(created) {
+  const failed = await invoke('undo_moves', { pairs: created.ops.map(([from, to]) => [to, from]) });
+  if (created.replaced?.length) await invoke('trash_restore', { paths: created.replaced, skip: 0 });
+  if (failed.length) throw new Error(`${plural(failed.length, 'élément')} non remis en place : ${failed.slice(0, 3).join(', ')}`);
 }
 
-/** À appeler après un collage, un déplacement ou un glisser-déposer. */
+/** À appeler après un collage, un déplacement ou un glisser-déposer (résultat de pasteWithPrompt). */
 function recordPaste(sources, created, moved, label) {
-  if (!created.length) return;
-  if (moved) {
-    const pairs = pairByName(sources, created);
-    if (pairs.length) pushUndo(label, () => undoMoves(pairs));
-  } else pushUndo(label, () => undoCreate(created));
+  if (!created.length || (created.ops && !created.ops.length)) return; // tout ignoré : rien à annuler
+  pushUndo(label, () => (moved && created.ops ? undoMoves(created) : undoCopies(created)));
 }
 
 // Ctrl+Z (hors champs de saisie, boîtes de dialogue et visionneuse)

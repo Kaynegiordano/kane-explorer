@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.21.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.22.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `C:\KaneOS\kane-explorer` (depuis le 07/11/2026 ; l'ancien `D:\Claude Code\kane-explorer` n'existe plus ;
   exclu du dépôt KaneOS par `C:\KaneOS\.git\info\exclude`, sans toucher à son .gitignore)
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
@@ -48,10 +48,10 @@ Installateur NSIS ~2 Mo, en français.
 | `src/features.js` | Fonctions avancées, chargé **après** main.js (scripts classiques partageant la portée globale) |
 | `src/pins.js` | Épinglés (dossiers, fichiers, lecteurs ; glisser pour réordonner ; renommer), Accès rapide personnalisable (masquer, renommer, réordonner), boîte `promptDialog` |
 | `src/tools.js` | Outils : Étagère, Ranger (tri annulable), Nouveau fichier, ZIP/Extraire, « Copier le chemin sous forme de… » |
-| `src/search.js` | Syntaxe de recherche (`parseFilter` / `matchFilter`), recherches enregistrées (barre latérale, bouton signet) |
+| `src/search.js` | Syntaxe de recherche (`parseFilter` / `matchFilter`), recherches enregistrées (barre latérale, bouton signet), **recherche dans les sous-dossiers** (1.22.0 : `deepSearch`, `tab.deep`, bandeau `#deep-bar`, `deepRefresh`, `deepExit`) |
 | `src/meta.js` | Notes en étoiles (`kRatings`), colonnes personnalisables (`COLS`, `visibleColumns`, `--cols`), cache de métadonnées |
 | `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
-| `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoMoves`, `recordPaste`) |
+| `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoCopies`, `undoMoves`, `recordPaste`) ; aussi dans la visionneuse, les doublons et les images similaires (1.22.0) |
 | `src/archive.js` | Archives (1.21.0, 7-Zip) : parcourues comme des dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`), cartes de progression, mot de passe, extraire ici / vers…, copier, glisser, compresser (voir « Archives : 7-Zip intégré ») |
 | `src/studio.js` | 1.6.0, chargé en dernier : barre des filtres IA (`renderAiBar`, `aiFacets`, `AI_FACETS` → recherche `p:`), images similaires (`openSimilar`), avant / après (`openSlider`, `vw.mode = 'slider'`, `vw.back` = retour à la visionneuse), mosaïque des dossiers en grille (`folderVisual`, `t.previews`) |
 | `src/actions.js` | 1.11.0, chargé en tout dernier : enveloppe `featureItemMenu`, `fileToolsMenu` et `featureBlankMenu` (réaffectation des fonctions globales). `pickFolder(title, lead)` (boîte de choix : onglets ouverts, épinglés, accès rapide, récents, lecteurs ; filtre, ↑ ↓, ou chemin collé + Entrée ; vérifié par `path_states`), `copyMoveTo` (F7 = Copier vers, F8 = Déplacer vers ; passe par `pasteWithPrompt` + `recordPaste`, donc conflits et Ctrl+Z), `compareFolders` (`compare_dirs` ; lignes cochables, Copier vers la droite / la gauche = `paste` avec `decisions: replace` groupé par dossier de destination, `make_dirs` avant ; fichiers remplacés à la Corbeille), `resizeMenu` / `resizeImages`, `makeShortcuts` (`create_shortcut`, `desktop_path`) |
@@ -67,6 +67,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src-tauri/src/video.rs` | `ffmpeg_path` (PATH, sinon `<lecteur>:\KaneOS\KaneClip\bin`, `KanevasData\bin`, KaneClip installé ; mis en cache), `save_frame` (première : `-frames:v 1` ; dernière : `-sseof -3 … -fps_mode passthrough -update 1`, repli sur la vidéo entière ; instant : `-ss t`), PNG temporaire caché puis renommé |
 | `src-tauri/src/heif.rs` | HEIC / HEIF / AVIF : `open_any` (WIC via `win::wic_decode`, sinon crate `image`), `exif_from_heif` (boîtes `meta` → `iinf` item « Exif » → `iloc`, fichier ou `idat`), `exif_set_upright`, `embed_exif` (APP1 JPEG, eXIf PNG) |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete » de Shell.Application en COM natif sur un fil STA depuis 1.21.0 ; avant : PowerShell `-ExecutionPolicy Bypass`) ; test ignoré `corbeille_aller_retour` (vraie Corbeille) |
+| `src-tauri/src/search.rs` | Recherche dans les sous-dossiers (1.22.0) : file de dossiers partagée par 2 à 8 fils, mots + extensions filtrés sur place, lots envoyés toutes les 150 ms (`search-hits`), limite 20 000, annulation par travail (`search_cancel`), jonctions jamais suivies ; commandes `search_tree`, `entries_of` (relit des résultats), `expand_path` (%VAR%, ~) dans lib.rs. Profil complet de l'utilisateur : 67 000 dossiers en 2,9 s |
 | `src-tauri/src/archive.rs` | Archives par 7-Zip intégré (1.21.0) : `list`, `extract`, `extract_temp`, `create`, `cancel`, dossiers provisoires (`staging`, `discard`, `finish_folder`), `cleanup_temp` |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
@@ -222,7 +223,13 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   rappel de `CopyFileExW` : arrêt immédiat, fichier partiel supprimé par Windows, ce qui est déjà copié est conservé). Fin : `phase: 'done'` ; échecs
   (accès refusé, fichier utilisé…) et annulation : évènement `copy-issues` (toast, la copie continue pour les autres fichiers). Fichiers **remplacés** :
   d'abord envoyés à la Corbeille (`shell_file_op` Recycle), jamais écrasés définitivement. Sans conflit ni décision : même chemin. Appelants : `doPaste`,
-  `dropInto`, `shelfPaste` (tools.js) ; l'annulation (`undo.js`) appelle `paste` sans décisions. Mesures (SSD NVMe) : 8 Go C: → D: en 2,6 s, première
+  `dropInto`, `shelfPaste` (tools.js), `copyMoveTo` (actions.js), `extractTo` (archive.js). Depuis 1.22.0, `paste` renvoie
+  `PasteOut { items, ops, replaced }` (`pasteWithPrompt` rend `items` avec `.ops` / `.replaced` attachés) : `items` = ce qui a été
+  créé ou modifié à la racine (jamais les ignorés), `ops` = chaque copie faite (source, chemin final ; un dossier fusionné : ses
+  éléments un par un), `replaced` = chemins dont l'ancienne version est à la Corbeille. Ctrl+Z (`undoCopies` / `undoMoves`) n'agit
+  que sur `ops` : copie → Corbeille puis `trash_restore(replaced, skip: 1)` ; déplacement → `undo_moves` (retour exact, nom
+  d'origine même après « (2) », dossier source recréé) puis `trash_restore(skip: 0)`. Avant 1.22.0, « Ignorer » et le contenu
+  d'origine d'un dossier fusionné étaient comptés comme créés : Ctrl+Z envoyait à la Corbeille des fichiers déjà là. Mesures (SSD NVMe) : 8 Go C: → D: en 2,6 s, première
   mise à jour à 453 ms, copie identique octet pour octet ; déplacement d'un dossier de 300 Mo sur le même disque : 4 ms. Restent à Windows : la
   Corbeille (`IFileOperation` Recycle, avec son avertissement si un fichier ne peut pas y aller) et les droits administrateur.
   Piège de test : `cat <<EOF` altère `\\` en `\` (les chemins `D:\x` deviennent `D:x`) : écrire les scripts de test avec l'outil Write.
@@ -357,6 +364,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.19.0 | Menu circulaire ramené à l'essentiel : seulement sur les images et vidéos, un anneau de formats de conversion (plus de menu Ouvrir / Copier / Marquer / Corbeille, d'éventails ni de bandeau). Colonnes de la liste : le séparateur entre deux colonnes suit le pointeur et répartit la largeur entre ses deux voisines (Nom compris), double-clic = largeurs d'origine, en-têtes tronqués avec « … » |
 | 1.20.0 | Menu circulaire et « Convertir en » étendus : PDF en images (PNG, JPG, WebP ; un dossier si plusieurs pages), images en PDF (plusieurs images = un seul PDF), sons (MP3, M4A, Opus, FLAC, WAV) |
 | 1.21.0 | Archives refaites avec 7-Zip intégré : noms japonais / emoji / accents, mots de passe, RAR5, ISO, tar.gz, cab, volumes .001 ; progression et Annuler ; Extraire ici (intelligent) / dans « nom » / vers…, sans doublon de dossier ; Ctrl+C depuis une archive ; gros fichiers (> 512 Mo) jamais copiés dans le dossier temporaire (glisser vers un dossier de Kane, extraction à côté de l'archive), temporaire vidé après 24 h ; Compresser en ZIP ou 7z sans planter ; dates d'origine conservées ; un .iso est monté par Windows au double-clic. Corrections : « Garder les deux » sur un dossier fusionnait et dupliquait chaque fichier en « (2) » ; un rafraîchissement automatique annulait l'ouverture d'une archive ou d'un dossier lent. Moins de ressemblance avec un logiciel malveillant (fausses alertes Defender) : plus aucun PowerShell caché (Corbeille, redémarrage, liste et bascule réseau → COM, relance native, GetIfTable2, netsh), plus de lecture du clavier en boucle (RegisterHotKey actif seulement au premier plan), téléchargement du moteur IA par WinHTTP au lieu de curl.exe, commande « en administrateur » inutilisée retirée |
+| 1.22.0 | **Recherche dans tous les sous-dossiers** : bandeau « Chercher « x » dans tous les sous-dossiers », Ctrl+Entrée ou Entrée quand rien ne correspond ici ; résultats en direct avec leur dossier, ouvrables, copiables, renommables ; type:image / ext: compris par le moteur ; Échap pour revenir. **Barre d'adresse** : chemins relatifs (« Images », « .. »), %APPDATA% et autres variables, « ~ », chemin d'un fichier (ouvre son dossier et le sélectionne), adresse web (navigateur). **Ctrl+Z corrigé** : après « Ignorer » ou une fusion de dossiers, il envoyait à la Corbeille des fichiers qui étaient déjà là ; il rend maintenant la version remplacée et remet un élément déplacé sous son nom d'origine ; aussi dans la visionneuse (Corbeille), les doublons et les images similaires. Renommage en lot : un fichier verrouillé ne laisse plus de « ~kane-….tmp » et n'écrase rien ; noms vides ou interdits refusés avant d'essayer. Espace sur une vidéo de la visionneuse = pause. Le bouton « Mise à jour » demande de nouveau confirmation. « Afficher dans le dossier » répété réutilise l'onglet ouvert. « Placer un dossier dans lui-même » détecté quelle que soit la casse |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -407,6 +415,14 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **Corbeille : date de suppression à la seconde** : `System.Recycle.DateDeleted` (VT_DATE) n'a pas de millisecondes ;
+  deux suppressions rapprochées (annuler une copie qui remplaçait un fichier) étaient indiscernables et `trash_restore`
+  rendait la mauvaise version. Depuis 1.22.0, l'heure exacte (FILETIME) est lue dans le fichier `$I…` voisin du `$R…`
+  (`FolderItem.Path`), octets 16 à 24 (`fsx::deleted_at`).
+- **Bash + heredoc Python** : les barres obliques inverses d'un script Python passé par `<<'EOF'` arrivent réduites
+  (deux deviennent une : une expression régulière de fin de chemin perd son échappement, un « \n » devient un vrai saut
+  de ligne dans une chaîne JS). Pour du code qui en contient : outil Edit, puis `node --check` sur les .js.
 
 - **Microsoft Defender (fausses alertes `!ml`)** : le 05/11/2026 il a mis en quarantaine Kane 1.20.0 installé et son
   installateur (`Trojan:Win32/Bearfoos.A!ml`) ; le 07/11 il supprime à chaque compilation

@@ -22,6 +22,7 @@ mod video;
 mod fileops;
 mod models;
 mod pdf;
+mod search;
 
 #[derive(Serialize)]
 struct Entry {
@@ -631,14 +632,33 @@ fn remove_empty_sources(dirs: &[PathBuf]) {
     }
 }
 
-/// Colle (copie ou déplace) des éléments dans `dest` avec le moteur de l'Explorateur (progression, annulation, Corbeille pour l'annulation…).
+/// `inner` est-il `outer` lui-même ou un de ses sous-dossiers ? (sans tenir compte de la casse, comme Windows)
+fn is_inside(inner: &Path, outer: &Path) -> bool {
+    let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let (i, o) = (norm(inner), norm(outer));
+    i == o || i.starts_with(&format!("{o}\\"))
+}
+
+/// Résultat d'un collage : de quoi sélectionner, et de quoi l'annuler exactement (Ctrl+Z).
+#[derive(Serialize, Default)]
+struct PasteOut {
+    /// Éléments du dossier de destination créés ou modifiés (nouveaux, remplacés, dossiers fusionnés) ; jamais les ignorés.
+    items: Vec<String>,
+    /// Chaque copie / déplacement fait : (source, chemin final). Pour un dossier fusionné : ses éléments, un par un.
+    ops: Vec<(String, String)>,
+    /// Chemins finals dont l'ancienne version est partie à la Corbeille (« Remplacer »).
+    replaced: Vec<String>,
+}
+
+/// Colle (copie ou déplace) des éléments dans `dest` avec le moteur de copie de Kane (progression, annulation, Corbeille pour les remplacés).
 /// `decisions` : pour chaque nom déjà présent dans `dest`, « replace », « skip » ou « both » (choix faits dans Kane, voir `paste_conflicts`).
-/// Renvoie les éléments créés.
+/// Jusqu'en 1.21.0, le résultat comptait aussi les éléments ignorés et le contenu d'origine des dossiers fusionnés :
+/// Ctrl+Z envoyait alors à la Corbeille des fichiers qui étaient là avant le collage.
 #[cfg(windows)]
 #[tauri::command]
-async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: bool, decisions: Option<std::collections::HashMap<String, String>>) -> Result<Vec<String>, String> {
+async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: bool, decisions: Option<std::collections::HashMap<String, String>>) -> Result<PasteOut, String> {
     let dest_path = PathBuf::from(&dest);
-    let same = |p: &Path| p.parent().map(|x| x.to_string_lossy().eq_ignore_ascii_case(&dest_path.to_string_lossy())).unwrap_or(false);
+    let same = |p: &Path| p.parent().map(|x| x.to_string_lossy().trim_end_matches('\\').eq_ignore_ascii_case(dest_path.to_string_lossy().trim_end_matches('\\'))).unwrap_or(false);
     let mut todo = Vec::new();
     for p in paths {
         let src = PathBuf::from(&p);
@@ -649,24 +669,21 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
         if cut && same(&src) {
             continue; // déjà au bon endroit
         }
-        if src.is_dir() && dest_path.starts_with(&src) {
+        if src.is_dir() && is_inside(&dest_path, &src) {
             return Err(format!("Impossible de placer « {name} » dans lui-même"));
         }
         todo.push(p);
     }
     if todo.is_empty() {
-        return Ok(vec![]);
+        return Ok(PasteOut::default());
     }
-    // Contenu avant l'opération : on en déduit ensuite ce qui a été créé
-    let before: std::collections::HashSet<String> = fs::read_dir(&dest_path)
-        .map_err(err)?
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().to_lowercase())
-        .collect();
+    if !dest_path.is_dir() {
+        return Err(format!("Le dossier « {dest} » n'existe plus"));
+    }
     let decisions = decisions.unwrap_or_default();
     // Plan : chaque élément avec la décision prise pour lui (nom libre, remplacement, ignoré, fusion de dossiers)
-    let (ops, merged, replaced) = {
-        let (mut ops, mut merged, mut reserved, mut replaced) = (Vec::new(), Vec::new(), std::collections::HashSet::new(), Vec::new());
+    let (ops, merged, replaced, tops) = {
+        let (mut ops, mut merged, mut reserved, mut replaced, mut tops) = (Vec::new(), Vec::new(), std::collections::HashSet::new(), Vec::new(), Vec::new());
         for p in &todo {
             let src = PathBuf::from(p);
             if !cut && same(&src) {
@@ -679,13 +696,24 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
                 Some("both") => Act::Both,
                 _ => Act::Skip, // sans décision : on ne touche à rien
             };
+            let m0 = merged.len();
             plan_paste(&src, &dest_path, act, &mut reserved, &mut ops, &mut merged, &mut replaced);
+            if merged.get(m0) == Some(&src) {
+                tops.push(dest_path.join(src.file_name().unwrap_or_default())); // dossier fusionné : il reçoit des éléments
+            }
         }
-        (ops, merged, replaced)
+        (ops, merged, replaced, tops)
     };
     if ops.is_empty() {
-        return Ok(vec![]);
+        return Ok(PasteOut::default());
     }
+    let finals: Vec<(String, PathBuf, bool)> = ops
+        .iter()
+        .map(|(src, dir, name)| {
+            let n = name.clone().unwrap_or_else(|| Path::new(src).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+            (src.clone(), Path::new(dir).join(n), Path::new(dir) == dest_path.as_path())
+        })
+        .collect();
     // Fichiers remplacés : envoyés d'abord à la Corbeille (récupérables), jamais écrasés définitivement
     if !replaced.is_empty() {
         let list: Vec<String> = replaced.iter().map(|p| p.to_string_lossy().into_owned()).collect();
@@ -717,30 +745,74 @@ async fn paste(window: WebviewWindow, paths: Vec<String>, dest: String, cut: boo
         out
     })
     .await?;
-    let aborted = outcome.cancelled;
-    // Éléments créés ou remplacés à la racine de la destination (noms de la sélection ou « (2) »)
-    let wanted: std::collections::HashSet<String> = todo
-        .iter()
-        .filter_map(|p| Path::new(p).file_name().map(|n| n.to_string_lossy().to_lowercase()))
-        .collect();
-    let created: Vec<String> = fs::read_dir(&dest_path)
-        .map_err(err)?
-        .flatten()
-        .filter(|e| {
-            let n = e.file_name().to_string_lossy().to_lowercase();
-            !before.contains(&n) || (decisions_touched(&n, &wanted))
-        })
-        .map(|e| e.path().to_string_lossy().into_owned())
-        .collect();
-    if aborted && created.is_empty() {
+    // Ce qui existe vraiment à l'arrivée (une copie en échec ou interrompue n'y est pas)
+    let mut out = PasteOut::default();
+    let replaced_set: std::collections::HashSet<String> = replaced.iter().map(|p| p.to_string_lossy().to_lowercase()).collect();
+    for (src, fin, top) in &finals {
+        if !fin.exists() {
+            continue;
+        }
+        let f = fin.to_string_lossy().into_owned();
+        if replaced_set.contains(&f.to_lowercase()) {
+            out.replaced.push(f.clone());
+        }
+        if *top {
+            out.items.push(f.clone());
+        }
+        out.ops.push((src.clone(), f));
+    }
+    for t in tops {
+        let t = t.to_string_lossy().into_owned();
+        if !out.items.iter().any(|i| i.eq_ignore_ascii_case(&t)) {
+            out.items.push(t);
+        }
+    }
+    if outcome.cancelled && out.ops.is_empty() {
         return Err("Opération annulée".into());
     }
-    Ok(created)
+    Ok(out)
 }
 
-/// Un élément déjà présent avant la collure mais qui porte le nom d'un élément collé (remplacé ou fusionné).
-fn decisions_touched(name: &str, wanted: &std::collections::HashSet<String>) -> bool {
-    wanted.contains(name)
+/// Annule un déplacement : chaque élément (chemin actuel, chemin d'origine) retourne exactement à sa place et sous son nom,
+/// même s'il avait été renommé « (2) » ou si son dossier d'origine a disparu (dossier fusionné vidé). Autre disque : copie puis suppression.
+#[cfg(windows)]
+#[tauri::command]
+async fn undo_moves(window: WebviewWindow, pairs: Vec<(String, String)>) -> Result<Vec<String>, String> {
+    let (app, label) = (window.app_handle().clone(), window.label().to_string());
+    blocking(move || {
+        let mut ops = Vec::new();
+        let mut failed = Vec::new();
+        for (cur, orig) in &pairs {
+            let (o, c) = (Path::new(orig), Path::new(cur));
+            let (Some(parent), Some(name)) = (o.parent(), o.file_name()) else { continue };
+            if !c.exists() {
+                continue;
+            }
+            if o.exists() && !orig.eq_ignore_ascii_case(cur) {
+                failed.push(name.to_string_lossy().into_owned()); // la place d'origine est reprise : on ne l'écrase pas
+                continue;
+            }
+            if fs::create_dir_all(parent).is_err() {
+                failed.push(name.to_string_lossy().into_owned());
+                continue;
+            }
+            ops.push((cur.clone(), parent.to_string_lossy().into_owned(), Some(name.to_string_lossy().into_owned())));
+        }
+        let res = copyeng::run(&ops, true, &mut |p: &copyeng::Progress| {
+            let _ = app.emit_to(
+                label.as_str(),
+                "copy-progress",
+                serde_json::json!({ "phase": "run", "move": true, "total": p.total, "done": p.done, "file": p.file, "filesDone": p.files_done, "filesTotal": p.files_total, "bps": p.bps }),
+            );
+        });
+        if res.shown {
+            let _ = app.emit_to(label.as_str(), "copy-progress", serde_json::json!({ "phase": "done" }));
+        }
+        // (les dossiers fusionnés à l'arrivée existaient avant le déplacement : ils restent)
+        failed.extend(res.failed);
+        failed
+    })
+    .await
 }
 
 /// Surveille le dossier affiché par une fenêtre : lui envoie « dir-changed » quand il change.
@@ -1426,8 +1498,8 @@ async fn file_columns(paths: Vec<String>, ai: bool) -> Result<Vec<columns::FileC
 }
 
 #[tauri::command]
-async fn trash_restore(paths: Vec<String>) -> Result<Vec<String>, String> {
-    blocking(move || fsx::trash_restore(&paths)).await?
+async fn trash_restore(paths: Vec<String>, skip: Option<usize>) -> Result<Vec<String>, String> {
+    blocking(move || fsx::trash_restore(&paths, skip.unwrap_or(0))).await?
 }
 
 /* ---------- Archives : 7-Zip intégré (archive.rs) ---------- */
@@ -1912,6 +1984,96 @@ fn file_entry(p: &Path, meta: &fs::Metadata) -> Entry {
     }
 }
 
+/// Entrée de liste pour un chemin quelconque (résultat de recherche) : dossier ou fichier, liens suivis comme dans `list_dir`.
+fn path_entry(p: &Path, meta: &fs::Metadata) -> Entry {
+    let attrs = attributes(meta);
+    let followed = if meta.file_type().is_symlink() { fs::metadata(p).ok() } else { None };
+    let m = followed.as_ref().unwrap_or(meta);
+    let is_dir = m.is_dir();
+    Entry {
+        name: p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        path: p.to_string_lossy().into_owned(),
+        is_dir,
+        size: if is_dir { 0 } else { m.len() },
+        modified: millis(m.modified()),
+        created: millis(m.created()),
+        hidden: is_hidden(meta),
+        protected: attrs & (ATTR_HIDDEN | ATTR_SYSTEM) == (ATTR_HIDDEN | ATTR_SYSTEM),
+        attrs,
+        display: None,
+    }
+}
+
+#[derive(Serialize)]
+struct SearchDone {
+    entries: Vec<Entry>,
+    #[serde(flatten)]
+    summary: search::Summary,
+}
+
+/// Recherche dans les sous-dossiers de `root` : les résultats arrivent par lots (« search-hits ») pendant la recherche,
+/// le dernier lot et le bilan avec la réponse. `exts` / `dirs` : filtres « type: » et « ext: » de la barre de recherche.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn search_tree(window: WebviewWindow, job: u32, root: String, words: Vec<String>, exts: Vec<String>, dirs: bool, hidden: bool, protected: bool, max: usize) -> Result<SearchDone, String> {
+    let (app, label) = (window.app_handle().clone(), window.label().to_string());
+    blocking(move || {
+        let q = search::Query { words, exts, dirs, hidden, protected, max: max.clamp(1, 50_000) };
+        let (rest, summary) = search::run(job, Path::new(&root), &q, &mut |batch| {
+            let entries: Vec<Entry> = batch.iter().map(|h| path_entry(&h.path, &h.meta)).collect();
+            let _ = app.emit_to(label.as_str(), "search-hits", serde_json::json!({ "job": job, "entries": entries }));
+        });
+        SearchDone { entries: rest.iter().map(|h| path_entry(&h.path, &h.meta)).collect(), summary }
+    })
+    .await
+}
+
+#[tauri::command]
+fn search_cancel(job: u32) {
+    search::cancel(job);
+}
+
+/// Barre d'adresse : « ~ » (dossier personnel) et variables d'environnement (%APPDATA%, %USERPROFILE%…) ;
+/// une variable inconnue reste telle quelle.
+#[tauri::command]
+fn expand_path(path: String) -> String {
+    let mut s = path.trim().to_string();
+    if s == "~" || s.starts_with("~\\") {
+        if let Some(h) = dirs::home_dir() {
+            s = format!("{}{}", h.display(), &s[1..]);
+        }
+    }
+    let mut out = String::new();
+    let mut rest = s.as_str();
+    while let Some(i) = rest.find('%') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let Some(j) = after.find('%') else {
+            out.push('%');
+            rest = after;
+            continue;
+        };
+        let name = &after[..j];
+        match std::env::var(name) {
+            Ok(v) if !name.is_empty() => out.push_str(&v),
+            _ => {
+                out.push('%');
+                out.push_str(name);
+                out.push('%');
+            }
+        }
+        rest = &after[j + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Entrées à jour des chemins donnés (ceux qui existent encore) : actualise une liste de résultats sans relancer la recherche.
+#[tauri::command]
+async fn entries_of(paths: Vec<String>) -> Result<Vec<Entry>, String> {
+    blocking(move || paths.iter().filter_map(|p| fs::symlink_metadata(p).ok().map(|m| path_entry(Path::new(p), &m))).collect()).await
+}
+
 /// Jusqu'à 4 images (ou vidéos) de chaque sous-dossier : les dossiers de la grille montrent leur contenu.
 #[tauri::command]
 async fn folder_previews(dir: String) -> Result<Vec<(String, Vec<Entry>)>, String> {
@@ -2309,6 +2471,11 @@ pub fn run() {
             path_states,
             file_columns,
             trash_restore,
+            search_tree,
+            search_cancel,
+            entries_of,
+            expand_path,
+            undo_moves,
             archive_list,
             archive_stamp,
             archive_extract,

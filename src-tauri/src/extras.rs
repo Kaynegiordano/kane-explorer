@@ -690,17 +690,33 @@ pub fn rename_batch(pairs: &[(String, String)]) -> Result<Vec<String>, String> {
         }
         targets.push(t);
     }
+    // Deux temps (noms provisoires puis définitifs) : permet d'échanger des noms (A → B, B → A).
+    // Un fichier verrouillé (ouvert ailleurs) garde son nom d'origine ; jusqu'en 1.21.0, une erreur en cours de route
+    // laissait les fichiers déjà traités sous leur nom provisoire « ~kane-….tmp ».
     let stamp = std::process::id();
-    let mut temps = Vec::new();
+    let mut temps: Vec<Option<PathBuf>> = Vec::new();
     for (i, (src, _)) in pairs.iter().enumerate() {
         let tmp = Path::new(src).with_file_name(format!("~kane-{stamp}-{i}.tmp"));
-        fs::rename(src, &tmp).map_err(|e| e.to_string())?;
-        temps.push(tmp);
+        temps.push(fs::rename(src, &tmp).is_ok().then_some(tmp));
     }
-    for (tmp, target) in temps.iter().zip(&targets) {
-        fs::rename(tmp, target).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (((src, _), tmp), target) in pairs.iter().zip(&temps).zip(&targets) {
+        let Some(tmp) = tmp else {
+            out.push(src.clone()); // pas bougé
+            continue;
+        };
+        // (le nom visé peut encore être pris par un fichier verrouillé : fs::rename l'écraserait)
+        if !target.exists() && fs::rename(tmp, target).is_ok() {
+            out.push(target.to_string_lossy().into_owned());
+        } else {
+            let _ = fs::rename(tmp, src); // nom d'origine
+            out.push(src.clone());
+        }
     }
-    Ok(targets.iter().map(|t| t.to_string_lossy().into_owned()).collect())
+    if out.iter().zip(pairs).all(|(o, (src, _))| o == src) {
+        return Err("Aucun élément n'a pu être renommé (fichiers utilisés par un autre programme ?)".into());
+    }
+    Ok(out)
 }
 
 /* ---------------- Réseau (Ethernet / Wi-Fi) ---------------- */
@@ -915,6 +931,36 @@ pub fn create_file(parent: &Path, name: &str, content: &str) -> Result<String, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renommage en lot : échange de noms, et un fichier verrouillé garde son nom sans rien écraser ni laisser de « ~kane-….tmp ».
+    #[test]
+    fn renommage_en_lot() {
+        let dir = std::env::temp_dir().join(format!("kane-lot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        for (n, c) in [("a.txt", "A"), ("b.txt", "B"), ("c.txt", "C")] {
+            fs::write(dir.join(n), c).unwrap();
+        }
+        // Échange a <-> b
+        let out = rename_batch(&[(p("a.txt"), "b.txt".into()), (p("b.txt"), "a.txt".into())]).unwrap();
+        assert_eq!(out, vec![p("b.txt"), p("a.txt")]);
+        assert_eq!(fs::read_to_string(dir.join("b.txt")).unwrap(), "A");
+        // c verrouillé (ouvert sans partage) : a -> c impossible, c -> d impossible ; rien n'est écrasé
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let lock = fs::OpenOptions::new().read(true).share_mode(0).open(dir.join("c.txt")).unwrap();
+            let out = rename_batch(&[(p("c.txt"), "d.txt".into()), (p("b.txt"), "e.txt".into())]).unwrap();
+            assert_eq!(out, vec![p("c.txt"), p("e.txt")]);
+            assert!(rename_batch(&[(p("c.txt"), "f.txt".into())]).is_err());
+            drop(lock);
+            assert_eq!(fs::read_to_string(dir.join("c.txt")).unwrap(), "C");
+        }
+        let left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(left.iter().all(|n| !n.starts_with("~kane-")), "{left:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// Durée de la lecture des prompts d'un vrai dossier : `SCAN_DIR=… cargo test --lib mesure_scan -- --ignored --nocapture`
     #[test]

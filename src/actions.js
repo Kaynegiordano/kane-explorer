@@ -60,7 +60,9 @@ function pickFolder(title, lead) {
       } else if (ev.key === 'Enter') {
         ev.preventDefault();
         const typed = q.value.trim().replace(/^"|"$/g, '');
-        choose(/^[a-z]:[\\/]|^\\\\/i.test(typed) ? typed : shown[cur]?.path);
+        // Chemin tapé ou collé (aussi %APPDATA%\…, ~\…), sinon le dossier proposé en surbrillance
+        if (/^[a-z]:[\\/]|^\\\\|^%[^%]+%|^~([\\/]|$)/i.test(typed)) resolveAddress(typed).then(choose);
+        else choose(shown[cur]?.path);
       } else if (ev.key === 'Escape') closeModal();
     };
     modalBox.onclick = (ev) => {
@@ -84,7 +86,7 @@ async function copyMoveTo(sel, cut) {
   try {
     const created = await pasteWithPrompt(paths, dest, cut);
     recordPaste(paths, created, cut, cut ? 'Déplacement' : 'Copie');
-    toast(`${plural(created.length, 'élément')} ${cut ? 'déplacé' : 'copié'}${created.length > 1 ? 's' : ''} vers ${basename(dest) || dest}`);
+    toast(pastedText(created, cut ? 'déplacé' : 'copié', ` vers ${basename(dest) || dest}`));
     if (cut) refresh(true);
   } catch (err) { if (String(err?.message || err) !== 'Opération annulée') toast(cleanError(err), 'error'); }
 }
@@ -153,7 +155,7 @@ async function compareFolders(a, b) {
       const decisions = Object.fromEntries(list.map(([, name]) => [name.toLowerCase(), 'replace']));
       try {
         await invoke('make_dirs', { path: dir });
-        n += (await invoke('paste', { paths: list.map((l) => l[0]), dest: dir, cut: false, decisions })).length;
+        n += (await invoke('paste', { paths: list.map((l) => l[0]), dest: dir, cut: false, decisions })).items.length;
       } catch (err) { toast(cleanError(err), 'error'); }
     }
     toast(`${plural(n, 'élément')} copié${n > 1 ? 's' : ''} vers la ${toRight ? 'droite' : 'gauche'}`);

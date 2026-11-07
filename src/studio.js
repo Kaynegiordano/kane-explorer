@@ -142,8 +142,10 @@ async function openSimilar(path) {
       if (!armed) { armed = true; trashBtn.textContent = `Confirmer : ${plural(checked.length, 'image')} à la Corbeille`; return; }
       try {
         await releaseHandles();
-        if (await invoke('trash_paths', { paths: checked.map((c) => c.value) })) { toast('Opération annulée'); return; }
-        toast(`${plural(checked.length, 'image')} envoyée${checked.length > 1 ? 's' : ''} à la Corbeille`);
+        const paths = checked.map((c) => c.value);
+        if (await invoke('trash_paths', { paths })) { toast('Opération annulée'); return; }
+        toast(`${plural(checked.length, 'image')} envoyée${checked.length > 1 ? 's' : ''} à la Corbeille (Ctrl+Z pour annuler)`);
+        pushUndo(`Corbeille : ${plural(paths.length, 'image similaire')}`, () => undoTrash(paths));
         checked.forEach((c) => c.closest('.sim-card').remove());
         modalBox.querySelectorAll('.sim-group').forEach((g) => { if (g.querySelectorAll('.sim-card').length < 2) g.remove(); });
         update();

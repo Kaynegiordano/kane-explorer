@@ -360,7 +360,7 @@ async function extractTo(archive, names, destDir, { mode = 'merge', prefix = '',
     if (mode === 'folder' || (mode === 'here' && kids.length > 1)) created = [await invoke('archive_finish_folder', { staging, prefix, name: stem })];
     else created = await pasteWithPrompt(kids.map((k) => k.path), destDir, true);
     if (warning) toast(`Extraction terminée avec des problèmes : ${warning}`, 'error');
-    if (created.length) pushUndo(`Extraction de « ${basename(archive)} »`, () => undoCreate(created));
+    if (created.length) pushUndo(`Extraction de « ${basename(archive)} »`, () => undoCopies(created));
     return created;
   } finally {
     st.finish();

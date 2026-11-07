@@ -572,3 +572,19 @@ body.no-anim .arch-card.wait .cc-bar i { animation: none; width: 100%; opacity: 
 @keyframes rd-out { to { opacity: 0; transform: scale(.85) rotate(8deg); } }
 @keyframes rd-fire { to { opacity: 0; transform: scale(1.12); } }
 @media (prefers-reduced-motion: reduce) { #radial, #radial * { animation: none !important; } }
+
+/* Recherche dans les sous-dossiers (search.js, 1.22.0) */
+.deep-bar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; min-height: 36px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); font-size: 12.5px; color: var(--text); flex: none; }
+.deep-bar[hidden] { display: none; }
+.deep-bar > svg { width: 16px; height: 16px; fill: none; stroke: var(--accent); stroke-width: 2; flex: none; }
+.deep-bar .grow { flex: 1; }
+.deep-bar .btn { height: 26px; padding: 0 10px; font-size: 12.5px; }
+.deep-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deep-text small { color: var(--muted); margin-left: 4px; }
+.deep-go { display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 10px; border-radius: 13px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: var(--panel); color: var(--accent); font-size: 12.5px; cursor: pointer; }
+.deep-go:hover { background: var(--accent-soft); }
+.deep-go svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; flex: none; }
+.deep-go span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deep-kbd { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.row .name small.deep-where { color: var(--muted); font-size: 11.5px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; max-width: 55%; }
+.empty .empty-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }

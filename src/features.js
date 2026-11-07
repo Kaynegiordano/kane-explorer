@@ -186,13 +186,22 @@ function itemType(e) {
 }
 
 function itemBadges(e) {
-  const stars = listCols.includes('rating') ? '' : ratingBadge(e);
+  const stars = (listCols.includes('rating') ? '' : ratingBadge(e)) + deepWhere(e);
   const s = subOf(e);
   if (!s) return stars;
   let html = stars;
   if (s.git_branch) html += `<em class="badge git">⎇ ${esc(s.git_branch)}</em>`;
   for (const k of s.projects.slice(0, 2)) if (k !== 'Wallpaper Engine') html += `<em class="badge">${esc(k)}</em>`;
   return html;
+}
+
+/** Résultat d'une recherche dans les sous-dossiers : son dossier, relatif au dossier de départ (search.js). */
+function deepWhere(e) {
+  if (!tab.deep) return '';
+  const par = (parentOf(e.path) || '').replace(/\\+$/, '');
+  const root = tab.path.replace(/\\+$/, '');
+  const rel = par.length > root.length && par.toLowerCase().startsWith(root.toLowerCase()) ? par.slice(root.length + 1) : '';
+  return `<small class="deep-where" title="${esc(par)}">${rel ? esc(rel) : 'dans ce dossier'}</small>`;
 }
 
 /** Projet Wallpaper Engine : son aperçu remplace l'icône de dossier (animé au survol). */
@@ -1239,8 +1248,19 @@ async function viewerTrash() {
   await releaseHandles();
   try {
     if (await invoke('trash_paths', { paths: [e.path] })) { toast('Opération annulée'); showViewerItem(); return; }
-    toast(`« ${e.name} » → Corbeille`);
+    toast(`« ${e.name} » → Corbeille (Ctrl+Z pour la récupérer)`);
   } catch (err) { toast(cleanError(err), 'error'); showViewerItem(); return; }
+  // Ctrl+Z (ici ou dans le dossier) : le fichier revient, et reprend sa place dans la visionneuse si elle est encore ouverte
+  const list = vw.list, at = vw.i;
+  pushUndo(`Corbeille : ${e.name}`, async () => {
+    await undoTrash([e.path]);
+    if (vw?.mode !== 'single' || vw.list !== list || viewerEl.hidden) return;
+    list.splice(Math.min(at, list.length), 0, e);
+    vw.i = Math.min(at, list.length - 1);
+    vw.shown = null;
+    stripReset();
+    showViewerItem();
+  });
   vw.list.splice(vw.i, 1);
   stripReset();
   if (!vw.list.length) { closeViewer(); return; }
@@ -1453,8 +1473,15 @@ viewerEl.addEventListener('click', async (ev) => {
       img.removeAttribute('src');
       await releaseHandles();
       try {
-        if (await invoke('trash_paths', { paths: [vw.list[k].path] })) img.src = src;
-        else fig.classList.add('gone');
+        const gone = vw.list[k];
+        if (await invoke('trash_paths', { paths: [gone.path] })) img.src = src;
+        else {
+          fig.classList.add('gone');
+          pushUndo(`Corbeille : ${gone.name}`, async () => {
+            await undoTrash([gone.path]);
+            if (fig.isConnected) { fig.classList.remove('gone'); img.src = src; }
+          });
+        }
       } catch (err) { img.src = src; toast(cleanError(err), 'error'); }
       break;
     }
@@ -1504,6 +1531,7 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'F11') { viewerFullscreen(); return; }
+  if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z') { undoLast(); return; } // image envoyée à la Corbeille
   if (vw.mode === 'single' && (ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
     const e = vw.list[vw.i];
     if (ev.shiftKey) copyAiField(e, 'prompt'); else copyImage(e);
@@ -1524,6 +1552,7 @@ document.addEventListener('keydown', (ev) => {
   }
   if (vw.mode !== 'single') return;
   if (ev.altKey && /^[0-5]$/.test(ev.key)) setRating([vw.list[vw.i].path], +ev.key);
+  else if (ev.key === ' ' && viewerEl.querySelector('.vw-stage video')) { const v = viewerEl.querySelector('.vw-stage video'); if (v.paused) v.play().catch(() => {}); else v.pause(); } // vidéo : pause / lecture
   else if (ev.key === 'ArrowRight' || ev.key === ' ') viewerGo(1);
   else if (ev.key === 'ArrowLeft') viewerGo(-1);
   else if (ev.key === 'ArrowDown' || ev.key === 'PageDown') viewerGo(1);
@@ -1646,7 +1675,8 @@ async function openDuplicates(path) {
       try {
         await releaseHandles();
         if (await invoke('trash_paths', { paths })) { toast('Opération annulée'); return; }
-        toast(`${plural(paths.length, 'doublon')} envoyé${paths.length > 1 ? 's' : ''} à la Corbeille`);
+        toast(`${plural(paths.length, 'doublon')} envoyé${paths.length > 1 ? 's' : ''} à la Corbeille (Ctrl+Z pour annuler)`);
+        pushUndo(`Corbeille : ${plural(paths.length, 'doublon')}`, () => undoTrash(paths));
         closeModal();
         refresh();
       } catch (err) { toast(cleanError(err), 'error'); }
@@ -1728,11 +1758,15 @@ function openBatchRename() {
   const update = () => {
     const names = sel.map(newName);
     const dupes = new Set(names.filter((n, k) => names.findIndex((x) => x.toLowerCase() === n.toLowerCase()) !== k));
+    // Nom vide (« .png »), caractère interdit par Windows ou point / espace final : refusé avant d'essayer
+    const invalid = (n) => !n.replace(/\.[^.]*$/, '').trim() || /[\\/:*?"<>|]/.test(n) || /[. ]$/.test(n);
+    const bad = new Set(names.filter((n, k) => n !== sel[k].name && invalid(n)));
     preview.innerHTML = sel.slice(0, 200).map((e, k) =>
-      `<div class="br-row${names[k] === e.name ? ' same' : ''}${dupes.has(names[k]) ? ' bad' : ''}"><span>${esc(e.name)}</span><span>→</span><span>${esc(names[k])}</span></div>`).join('');
+      `<div class="br-row${names[k] === e.name ? ' same' : ''}${dupes.has(names[k]) || bad.has(names[k]) ? ' bad' : ''}"><span>${esc(e.name)}</span><span>→</span><span>${esc(names[k])}</span></div>`).join('');
     const changed = names.filter((n, k) => n !== sel[k].name).length;
-    msg.textContent = dupes.size ? 'Plusieurs éléments auraient le même nom' : `${plural(changed, 'élément')} à renommer`;
-    modalBox.querySelector('[data-br="apply"]').disabled = !!dupes.size || !changed;
+    msg.textContent = dupes.size ? 'Plusieurs éléments auraient le même nom'
+      : bad.size ? 'Nom vide ou caractère interdit (\\ / : * ? " < > |)' : `${plural(changed, 'élément')} à renommer`;
+    modalBox.querySelector('[data-br="apply"]').disabled = !!dupes.size || !!bad.size || !changed;
     return names;
   };
 
@@ -1754,6 +1788,9 @@ function openBatchRename() {
     try {
       const out = await invoke('rename_batch', { pairs });
       pairs.forEach(([from], k) => moveTag(from, out[k]));
+      // Un fichier ouvert ailleurs ne se renomme pas : il garde son nom, les autres sont faits
+      const stuck = pairs.filter(([from], k) => samePath(out[k], from)).map(([from]) => basename(from));
+      if (stuck.length) toast(`${plural(stuck.length, 'élément')} non renommé${stuck.length > 1 ? 's' : ''} (utilisé${stuck.length > 1 ? 's' : ''} par un autre programme ?) : ${stuck.slice(0, 3).join(', ')}`, 'error');
       pushUndo(`Renommage en lot (${shown.length})`, async () => {
         await invoke('rename_batch', { pairs: out.map((np, k) => [np, basename(pairs[k][0])]) });
         out.forEach((np, k) => moveTag(np, pairs[k][0]));
@@ -2140,7 +2177,10 @@ document.addEventListener('keydown', (ev) => {
 window.__TAURI__.event.listen('open-here', async (ev) => {
   const { path, select } = ev.payload || {};
   if (!path) return;
-  await newTab(path);
+  // Même dossier déjà ouvert dans un onglet (« Afficher dans le dossier » répété) : on y retourne au lieu d'en ouvrir un de plus
+  const same = tabs.find((t) => t.path !== HOME && samePath(t.path, path));
+  if (same) { if (same === tab) await refresh(); else await switchTab(same); }
+  else await newTab(path);
   if (select) setTimeout(() => selectPath(select), 350);
 });
 
@@ -2177,7 +2217,7 @@ function featuresInit() {
   invoke('explorer_guard', { on: prefs.guardExplorer }).catch(() => {});
   els.search.placeholder = 'Rechercher… (type:image note:4 p:prompt)';
   $('btn-options').insertAdjacentHTML('beforebegin', '<button class="nav-item update-btn" id="update-btn" hidden></button>');
-  $('update-btn').onclick = installUpdate;
+  $('update-btn').onclick = () => installUpdate(); // (sans l'évènement en argument : il passait pour « sans confirmation »)
   // Vérification discrète des mises à jour (fenêtre principale, puis toutes les 6 h)
   if (isMainWindow) {
     setTimeout(announceInstalledUpdate, 1500);
