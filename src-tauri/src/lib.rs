@@ -378,13 +378,6 @@ async fn drives() -> Vec<Drive> {
     .unwrap_or_default()
 }
 
-/// Menu circulaire : lance un programme en administrateur.
-#[cfg(windows)]
-#[tauri::command]
-async fn run_as_admin(path: String) -> Result<(), String> {
-    blocking(move || win::run_as_admin(&path).map_err(|_| "Lancement refusé ou impossible".to_string())).await?
-}
-
 /// Ouvre un fichier avec son application par défaut.
 #[tauri::command]
 async fn open_path(path: String) -> Result<(), String> {
@@ -994,11 +987,10 @@ fn start_ui_threads(app: &tauri::AppHandle) {
                     }
                 }
             });
-            // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane
+            // Secours (même si l'affichage est figé) : Ctrl+Maj+F5 recharge la fenêtre, Ctrl+Maj+F12 redémarre Kane.
+            // RegisterHotKey, actif seulement quand une fenêtre de Kane a le focus (on_window_event → Focused).
             let handle = app.clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(120));
-                let Some((which, hwnd)) = win::rescue_keys() else { continue };
+            win::start_hotkeys(move |which, hwnd| {
                 if which == 2 {
                     restart_now(&handle);
                 }
@@ -1007,7 +999,6 @@ fn start_ui_threads(app: &tauri::AppHandle) {
                         let _ = w.reload();
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(1500)); // une seule fois par appui
             });
             // Lecteurs : prévient les fenêtres quand une clé USB, un disque... est branché ou retiré
             let handle = app.clone();
@@ -1242,17 +1233,17 @@ fn virtual_place(id: &str) -> Option<(String, Option<String>)> {
 
 /// Relance Kane depuis zéro : nouveau processus puis arrêt immédiat de celui-ci (marche même si le fil principal est bloqué).
 fn restart_now(app: &tauri::AppHandle) {
-    // Le nouveau Kane démarre une seconde plus tard, quand celui-ci a libéré l'« instance unique »
+    // Le nouveau Kane attend la fin de celui-ci (« --apres=<pid> », lu au tout début de run()) avant de prendre
+    // l'« instance unique ». Jusqu'en 1.20.0 : un PowerShell caché « Start-Sleep ; Start-Process » (signal antivirus).
     if let Ok(exe) = std::env::current_exe() {
-        let exe = exe.to_string_lossy().replace('\'', "''");
-        let _ = extras::quiet("powershell")
-            .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command"])
-            .arg(format!("Start-Sleep -Milliseconds 900; Start-Process -FilePath '{exe}'"))
-            .spawn();
+        let _ = std::process::Command::new(exe).arg(format!("{RELAUNCH_ARG}{}", std::process::id())).spawn();
     }
     let _ = app;
     std::process::exit(0);
 }
+
+/// Argument de relance : « --apres=<pid du Kane qui se ferme> ».
+const RELAUNCH_ARG: &str = "--apres=";
 
 /// Bouton « Redémarrer Kane » (menu du logo).
 #[tauri::command]
@@ -2052,7 +2043,11 @@ async fn network_adapters() -> Result<Vec<extras::Adapter>, String> {
 async fn network_switch(target: String) -> Result<(), String> {
     blocking(move || {
         let script = extras::network_switch_script(&target).ok_or("Aucune carte réseau correspondante")?;
-        win::run_elevated_powershell(&script).map_err(|_| "Bascule annulée".to_string())
+        let file = std::env::temp_dir().join(format!("kane-reseau-{}.txt", std::process::id()));
+        fs::write(&file, script).map_err(err)?;
+        let r = win::run_netsh_elevated(&file.to_string_lossy()).map_err(|_| "Bascule annulée".to_string());
+        let _ = fs::remove_file(&file);
+        r
     })
     .await?
 }
@@ -2176,6 +2171,11 @@ fn thumb_response(uri: &str) -> tauri::http::Response<Vec<u8>> {
 pub fn run() {
     let _ = PROCESS_START.set(now_ms());
     let args: Vec<String> = std::env::args().collect();
+    // Relance (« Redémarrer Kane », Ctrl+Maj+F12) : l'ancien processus doit d'abord libérer l'instance unique
+    #[cfg(windows)]
+    if let Some(pid) = args.iter().find_map(|a| a.strip_prefix(RELAUNCH_ARG)).and_then(|p| p.parse::<u32>().ok()) {
+        win::wait_process_exit(pid, 10_000);
+    }
     tauri::Builder::default()
         // Une seule instance : un nouveau lancement (Windows + E, dossier ouvert ailleurs)
         // ouvre une nouvelle fenêtre dans le Kane déjà lancé, comme l'Explorateur.
@@ -2221,6 +2221,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Raccourcis de secours actifs seulement quand une fenêtre de Kane est au premier plan
+            #[cfg(windows)]
+            if let tauri::WindowEvent::Focused(on) = event {
+                if *on {
+                    win::hotkeys_active(true);
+                } else {
+                    let app = window.app_handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        if !app.webview_windows().values().any(|w| w.is_focused().unwrap_or(false)) {
+                            win::hotkeys_active(false);
+                        }
+                    });
+                }
+            }
             // Fenêtre fermée : on arrête sa surveillance de dossier
             if let tauri::WindowEvent::Destroyed = event {
                 if let Ok(mut map) = window.state::<WatchState>().0.lock() {
@@ -2310,7 +2325,6 @@ pub fn run() {
             places,
             drives,
             open_path,
-            run_as_admin,
             reveal_path,
             open_terminal,
             rename_entry,

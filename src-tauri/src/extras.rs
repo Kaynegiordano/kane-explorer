@@ -713,63 +713,51 @@ pub struct Adapter {
     pub kind: String,   // ethernet | wifi
 }
 
-/// Cartes réseau physiques (lecture seule, sans droits administrateur).
+/// Cartes réseau physiques (lecture seule, sans droits administrateur) : lecture native par Windows
+/// (`win::physical_adapters`, GetIfTable2), plus de PowerShell caché depuis 1.21.0.
 pub fn network_adapters() -> Vec<Adapter> {
-    let script = "Get-NetAdapter -Physical | Select-Object Name,InterfaceDescription,Status,NdisPhysicalMedium,MediaType | ConvertTo-Json -Compress";
-    let Ok(out) = quiet("powershell").args(["-NoProfile", "-NonInteractive", "-Command", script]).output() else {
-        return vec![];
-    };
-    let txt = String::from_utf8_lossy(&out.stdout);
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(txt.trim()) else { return vec![] };
-    let list = if v.is_array() { v.as_array().cloned().unwrap_or_default() } else { vec![v] };
-    list.iter()
-        .filter_map(|a| {
-            let medium = a.get("NdisPhysicalMedium").and_then(|m| m.as_u64()).unwrap_or(0);
-            let media = a.get("MediaType").and_then(|m| m.as_str()).unwrap_or("");
-            let kind = if medium == 9 || media.contains("802.11") {
-                "wifi"
-            } else if medium == 14 || media.contains("802.3") {
-                "ethernet"
-            } else {
-                return None; // Bluetooth, etc.
-            };
-            Some(Adapter {
-                name: a.get("Name")?.as_str()?.to_string(),
-                description: a.get("InterfaceDescription").and_then(|d| d.as_str()).unwrap_or("").to_string(),
-                status: a.get("Status").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                kind: kind.into(),
-            })
-        })
-        .collect()
+    #[cfg(windows)]
+    {
+        crate::win::physical_adapters()
+            .into_iter()
+            .map(|(name, description, status, kind)| Adapter { name, description, status, kind })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
-/// Script PowerShell de bascule réseau. Cibles :
+/// Fichier de commandes `netsh` de bascule réseau (exécuté en administrateur). Cibles :
 /// « only:<nom> » (n'utiliser que cette carte), « enable:<nom> », « disable:<nom> »,
-/// « all » (tout activer), « wifi » / « ethernet » (par type).
+/// « all » (tout activer), « wifi » / « ethernet » (par type). La carte à activer passe toujours en premier.
 pub fn network_switch_script(target: &str) -> Option<String> {
     let adapters = network_adapters();
-    let q = |s: &str| format!("'{}'", s.replace('\'', "''"));
-    let list = |names: Vec<&str>| names.into_iter().map(q).collect::<Vec<_>>().join(",");
-    let enable = |n: String| if n.is_empty() { String::new() } else { format!("Enable-NetAdapter -Name {n} -Confirm:$false;") };
-    let disable = |n: String| if n.is_empty() { String::new() } else { format!("Disable-NetAdapter -Name {n} -Confirm:$false;") };
+    network_switch_lines(&adapters, target)
+}
+
+fn network_switch_lines(adapters: &[Adapter], target: &str) -> Option<String> {
+    let line = |name: &str, on: bool| {
+        format!("interface set interface name=\"{}\" admin={}\r\n", name.replace('"', ""), if on { "enabled" } else { "disabled" })
+    };
+    let lines = |names: Vec<&str>, on: bool| names.into_iter().map(|n| line(n, on)).collect::<String>();
     let known = |name: &str| adapters.iter().any(|a| a.name == name);
+    let names = |f: &dyn Fn(&Adapter) -> bool| adapters.iter().filter(|a| f(a)).map(|a| a.name.as_str()).collect::<Vec<_>>();
     let script = if let Some(name) = target.strip_prefix("only:") {
         if !known(name) {
             return None;
         }
-        // Active d'abord la carte choisie, puis coupe les autres
-        let others = list(adapters.iter().filter(|a| a.name != name).map(|a| a.name.as_str()).collect());
-        format!("{}{}", enable(q(name)), disable(others))
+        format!("{}{}", line(name, true), lines(names(&|a| a.name != name), false))
     } else if let Some(name) = target.strip_prefix("enable:") {
-        known(name).then(|| enable(q(name)))?
+        known(name).then(|| line(name, true))?
     } else if let Some(name) = target.strip_prefix("disable:") {
-        known(name).then(|| disable(q(name)))?
+        known(name).then(|| line(name, false))?
     } else {
-        let of = |kind: &str| list(adapters.iter().filter(|a| a.kind == kind).map(|a| a.name.as_str()).collect());
         match target {
-            "wifi" => format!("{}{}", enable(of("wifi")), disable(of("ethernet"))),
-            "ethernet" => format!("{}{}", enable(of("ethernet")), disable(of("wifi"))),
-            "all" | "both" => enable(list(adapters.iter().map(|a| a.name.as_str()).collect())),
+            "wifi" => format!("{}{}", lines(names(&|a| a.kind == "wifi"), true), lines(names(&|a| a.kind == "ethernet"), false)),
+            "ethernet" => format!("{}{}", lines(names(&|a| a.kind == "ethernet"), true), lines(names(&|a| a.kind == "wifi"), false)),
+            "all" | "both" => lines(names(&|_| true), true),
             _ => return None,
         }
     };
@@ -1010,5 +998,51 @@ mod tests {
             chunk(b"EXIF", &[&b"Exif\0\0"[..], &exif_with_comment("chat")].concat())].concat();
         let webp = [&b"RIFF"[..], &((body.len() + 4) as u32).to_le_bytes(), b"WEBP", &body].concat();
         assert_eq!(image_meta(&temp_file("a.webp", &webp)), vec![("parameters".into(), "chat".into())]);
+    }
+}
+
+#[cfg(test)]
+mod reseau_tests {
+    use super::*;
+
+    fn a(name: &str, kind: &str) -> Adapter {
+        Adapter { name: name.into(), description: String::new(), status: "Up".into(), kind: kind.into() }
+    }
+
+    /// Lignes netsh de la bascule : la carte choisie d'abord, les autres ensuite ; noms inconnus refusés.
+    #[test]
+    fn lignes_netsh() {
+        let list = [a("Wi-Fi 2", "wifi"), a("CPL", "ethernet"), a("Reseau Principal", "ethernet")];
+        assert_eq!(
+            network_switch_lines(&list, "only:CPL").unwrap(),
+            "interface set interface name=\"CPL\" admin=enabled\r\ninterface set interface name=\"Wi-Fi 2\" admin=disabled\r\ninterface set interface name=\"Reseau Principal\" admin=disabled\r\n"
+        );
+        assert_eq!(network_switch_lines(&list, "disable:Wi-Fi 2").unwrap(), "interface set interface name=\"Wi-Fi 2\" admin=disabled\r\n");
+        assert!(network_switch_lines(&list, "wifi").unwrap().starts_with("interface set interface name=\"Wi-Fi 2\" admin=enabled"));
+        assert!(network_switch_lines(&list, "only:Inconnue").is_none());
+        assert!(network_switch_lines(&list, "nimporte").is_none());
+    }
+
+    /// Lecture native comparée à « Get-NetAdapter -Physical » (lecture seule) :
+    /// `cargo test cartes_reseau -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn cartes_reseau() {
+        let native = network_adapters();
+        println!("natif : {:#?}", native.iter().map(|a| (&a.name, &a.status, &a.kind, &a.description)).collect::<Vec<_>>());
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Get-NetAdapter -Physical | ForEach-Object { $_.Name + '|' + $_.Status }"])
+            .output()
+            .unwrap();
+        let ps: Vec<(String, String)> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.trim().split_once('|').map(|(n, s)| (n.to_string(), s.to_string())))
+            .collect();
+        println!("Get-NetAdapter : {ps:?}");
+        for (n, s) in &ps {
+            let m = native.iter().find(|a| &a.name == n).unwrap_or_else(|| panic!("{n} absent de la lecture native"));
+            assert_eq!(&m.status, s, "{n}");
+        }
+        assert_eq!(native.len(), ps.len(), "cartes en trop dans la lecture native");
     }
 }

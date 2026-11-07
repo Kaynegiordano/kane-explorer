@@ -44,17 +44,11 @@ pub fn engine_dir(own: &Path) -> Option<PathBuf> {
 pub fn download_engine(own: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(own).map_err(|e| e.to_string())?;
     let zip_path = own.join("realesrgan.zip");
-    let curl = PathBuf::from(std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())).join(r"System32\curl.exe");
-    let res = quiet(&curl.to_string_lossy())
-        .args(["-L", "--fail", "-s", "-S", "-o"])
-        .arg(&zip_path)
-        .arg(ZIP_URL)
-        .output()
-        .map_err(|e| format!("Téléchargement impossible : {e}"))?;
-    if !res.status.success() {
-        let _ = fs::remove_file(&zip_path);
-        return Err(format!("Téléchargement impossible : {}", String::from_utf8_lossy(&res.stderr).trim()));
-    }
+    // WinHTTP natif (jusqu'en 1.20.0 : un curl.exe caché, signal « téléchargeur » pour les antivirus)
+    #[cfg(windows)]
+    crate::win::http_download(ZIP_URL, &zip_path)?;
+    #[cfg(not(windows))]
+    return Err("Non disponible".into());
     let file = fs::File::open(&zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("Archive invalide : {e}"))?;
     for i in 0..zip.len() {

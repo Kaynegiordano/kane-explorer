@@ -32,6 +32,7 @@ windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 windows = { version = "0.62", features = [
   "Data_Pdf",
   "Foundation",
+  "Win32_Devices_DeviceAndDriverInstallation",
   "Storage",
   "Storage_Streams",
   "UI",
@@ -40,6 +41,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Imaging",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinHttp",
   "Win32_Networking_WinSock",
   "Win32_Storage_EnhancedStorage",
   "Win32_Storage_FileSystem",

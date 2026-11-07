@@ -508,22 +508,6 @@ pub fn modifiers() -> (bool, bool) {
     unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) < 0, GetAsyncKeyState(VK_SHIFT.0 as i32) < 0) }
 }
 
-/// Raccourci de secours pressé dans une fenêtre de Kane : 1 = Ctrl+Maj+F5 (recharger la fenêtre),
-/// 2 = Ctrl+Maj+F12 (redémarrer Kane), avec la fenêtre concernée. Lu au niveau du système : marche même si la page est figée.
-pub fn rescue_keys() -> Option<(u8, isize)> {
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_F12, VK_F5, VK_SHIFT};
-    unsafe {
-        let down = |k: u16| GetAsyncKeyState(k as i32) < 0;
-        if !down(VK_CONTROL.0) || !down(VK_SHIFT.0) {
-            return None;
-        }
-        let which = if down(VK_F5.0) { 1 } else if down(VK_F12.0) { 2 } else { return None };
-        let fg = GetForegroundWindow();
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(fg, Some(&mut pid));
-        (pid == std::process::id()).then_some((which, fg.0 as isize))
-    }
-}
 
 /* ---------------- Fenêtres de l'Explorateur Windows (remplacées par Kane) ---------------- */
 
@@ -1058,22 +1042,220 @@ pub fn media_props(path: &str) -> Result<Vec<(String, String)>> {
     }
 }
 
-/// Lance PowerShell en administrateur (Windows affiche sa demande d'autorisation).
-pub fn run_elevated_powershell(script: &str) -> Result<()> {
-    let params = HSTRING::from(format!("-NoProfile -WindowStyle Hidden -Command \"{}\"", script.replace('"', "\\\"")));
-    let r = unsafe { ShellExecuteW(None, w!("runas"), w!("powershell.exe"), &params, PCWSTR::null(), SW_HIDE) };
-    // ShellExecute renvoie une valeur > 32 en cas de succès (refus de l'utilisateur = échec)
-    if r.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from(E_FAIL)) }
+/// Exécute un fichier de commandes `netsh` en administrateur (Windows affiche sa demande d'autorisation) et attend
+/// la fin (30 s au plus). Depuis 1.21.0 : plus de PowerShell caché et élevé (signal fort pour les antivirus).
+pub fn run_netsh_elevated(script_file: &str) -> Result<()> {
+    use windows::Win32::System::Threading::WaitForSingleObject;
+    let params = HSTRING::from(format!("-f \"{script_file}\""));
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        lpVerb: w!("runas"),
+        lpFile: w!("netsh.exe"),
+        lpParameters: PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    unsafe {
+        ShellExecuteExW(&mut info)?; // refus de l'utilisateur = erreur
+        if !info.hProcess.is_invalid() {
+            WaitForSingleObject(info.hProcess, 30_000);
+            let _ = windows::Win32::Foundation::CloseHandle(info.hProcess);
+        }
+    }
+    Ok(())
 }
 
-/// Lance un programme en administrateur (Windows affiche sa demande d'autorisation), dans son propre dossier.
-pub fn run_as_admin(path: &str) -> Result<()> {
-    let dir = std::path::Path::new(path).parent().map(|d| HSTRING::from(d.as_os_str())).unwrap_or_default();
-    let r = unsafe { ShellExecuteW(None, w!("runas"), &HSTRING::from(path), PCWSTR::null(), &dir, SW_SHOWNORMAL) };
-    if r.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from(E_FAIL)) }
+/// Attend la fin d'un processus (relance de Kane : l'ancien doit libérer l'« instance unique »).
+pub fn wait_process_exit(pid: u32, ms: u32) {
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    unsafe {
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            WaitForSingleObject(h, ms);
+            let _ = windows::Win32::Foundation::CloseHandle(h);
+        }
+    }
 }
 
-/* ----- Réseau : détection des cartes branchées / débranchées ----- */
+/// Raccourcis de secours (Ctrl+Maj+F5 recharger, Ctrl+Maj+F12 redémarrer), même si la page est figée.
+/// Fil dédié avec `RegisterHotKey`, actif seulement tant qu'une fenêtre de Kane est au premier plan
+/// (`hotkeys_active`) : aucun raccourci pris aux autres logiciels, et plus de lecture du clavier en boucle
+/// (`GetAsyncKeyState` toutes les 120 ms jusqu'en 1.20.0, ce que font les enregistreurs de frappe).
+/// `on_key(1 | 2, fenêtre au premier plan)`.
+pub fn start_hotkeys(on_key: impl Fn(u8, isize) + Send + 'static) {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_F12, VK_F5};
+    std::thread::spawn(move || unsafe {
+        let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE); // crée la file de messages du fil
+        HOTKEY_THREAD.store(GetCurrentThreadId(), std::sync::atomic::Ordering::Relaxed);
+        let mut on = false;
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            match msg.message {
+                WM_HOTKEY => {
+                    let fg = GetForegroundWindow();
+                    let mut pid = 0u32;
+                    GetWindowThreadProcessId(fg, Some(&mut pid));
+                    if pid == std::process::id() {
+                        on_key(msg.wParam.0 as u8, fg.0 as isize);
+                    }
+                }
+                m if m == WM_APP + 1 && !on => {
+                    let mods = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
+                    let _ = RegisterHotKey(None, 1, mods, VK_F5.0 as u32);
+                    let _ = RegisterHotKey(None, 2, mods, VK_F12.0 as u32);
+                    on = true;
+                }
+                m if m == WM_APP + 2 && on => {
+                    let _ = UnregisterHotKey(None, 1);
+                    let _ = UnregisterHotKey(None, 2);
+                    on = false;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
+static HOTKEY_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Active les raccourcis de secours quand une fenêtre de Kane passe au premier plan, les rend aux autres sinon.
+pub fn hotkeys_active(on: bool) {
+    let tid = HOTKEY_THREAD.load(std::sync::atomic::Ordering::Relaxed);
+    if tid != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(tid, if on { WM_APP + 1 } else { WM_APP + 2 }, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/* ----- Réseau : cartes et détection des branchements ----- */
+
+/// Carte réseau physique (avec connecteur, comme `Get-NetAdapter -Physical`) : (nom, description, état, type).
+/// État : Up, Disconnected, Disabled, Not Present ; type : ethernet | wifi. Lecture native (GetIfTable2), sans
+/// lancer PowerShell (0,7 s et 60 Mo jusqu'en 1.20.0).
+pub fn physical_adapters() -> Vec<(String, String, String, String)> {
+    use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2};
+    let text = |s: &[u16]| String::from_utf16_lossy(&s[..s.iter().position(|&c| c == 0).unwrap_or(s.len())]);
+    let mut out: Vec<(String, String, String, String)> = Vec::new();
+    unsafe {
+        let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+        if GetIfTable2(&mut table).is_err() || table.is_null() {
+            return out;
+        }
+        let t = &*table;
+        for r in std::slice::from_raw_parts(t.Table.as_ptr(), t.NumEntries as usize) {
+            let flags = r.InterfaceAndOperStatusFlags._bitfield;
+            // Bit 0 : matériel ; bit 1 : filtre (doublon) ; bit 2 : connecteur présent (= « Physical »)
+            if flags & 1 == 0 || flags & 2 != 0 || flags & 4 == 0 {
+                continue;
+            }
+            let kind = match (r.PhysicalMediumType.0, r.Type) {
+                (9, _) | (_, 71) => "wifi",
+                (14, _) | (_, 6) => "ethernet",
+                _ => continue, // Bluetooth, etc.
+            };
+            let status = match r.OperStatus.0 {
+                1 => "Up",
+                6 => "Not Present",
+                _ if r.AdminStatus.0 == 2 => "Disabled",
+                _ => "Disconnected",
+            };
+            let name = text(&r.Alias);
+            if name.is_empty() || out.iter().any(|a| a.0 == name) {
+                continue;
+            }
+            // Comme Get-NetAdapter : une carte dont le périphérique n'est plus là (adaptateur USB débranché,
+            // ancienne instance) est cachée
+            if status == "Not Present" && !pnp_present(&r.InterfaceGuid) {
+                continue;
+            }
+            out.push((name, text(&r.Description), status.into(), kind.into()));
+        }
+        FreeMibTable(table as *const _);
+    }
+    out
+}
+
+/// Télécharge une adresse https dans `dest` par WinHTTP (redirections suivies, proxy du système).
+/// Remplace en 1.21.0 un curl.exe caché (signal « téléchargeur » pour les antivirus).
+pub fn http_download(url: &str, dest: &std::path::Path) -> std::result::Result<(), String> {
+    use std::io::Write;
+    use windows::Win32::Networking::WinHttp::*;
+    let rest = url.strip_prefix("https://").ok_or("Adresse non sécurisée")?;
+    let (host, path) = rest.split_once('/').map(|(h, p)| (h.to_string(), format!("/{p}"))).unwrap_or((rest.to_string(), "/".into()));
+    let fail = |what: &str| format!("Téléchargement impossible ({what})");
+    unsafe {
+        let session = WinHttpOpen(w!("Kane Explorer"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0);
+        if session.is_null() {
+            return Err(fail("session"));
+        }
+        let conn = WinHttpConnect(session, &HSTRING::from(host), INTERNET_DEFAULT_HTTPS_PORT, 0);
+        let req = if conn.is_null() {
+            std::ptr::null_mut()
+        } else {
+            WinHttpOpenRequest(conn, w!("GET"), &HSTRING::from(path), PCWSTR::null(), PCWSTR::null(), std::ptr::null(), WINHTTP_FLAG_SECURE)
+        };
+        let result = (|| -> std::result::Result<(), String> {
+            if req.is_null() {
+                return Err(fail("connexion"));
+            }
+            WinHttpSendRequest(req, None, None, 0, 0, 0).map_err(|e| fail(&e.message()))?;
+            WinHttpReceiveResponse(req, std::ptr::null_mut()).map_err(|e| fail(&e.message()))?;
+            let (mut status, mut len) = (0u32, 4u32);
+            WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, PCWSTR::null(), Some(&mut status as *mut u32 as *mut _), &mut len, std::ptr::null_mut())
+                .map_err(|e| fail(&e.message()))?;
+            if status != 200 {
+                return Err(fail(&format!("réponse {status}")));
+            }
+            let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; 1 << 16];
+            loop {
+                let mut avail = 0u32;
+                WinHttpQueryDataAvailable(req, &mut avail).map_err(|e| fail(&e.message()))?;
+                if avail == 0 {
+                    break;
+                }
+                let mut read = 0u32;
+                let want = avail.min(buf.len() as u32);
+                WinHttpReadData(req, buf.as_mut_ptr() as *mut _, want, &mut read).map_err(|e| fail(&e.message()))?;
+                file.write_all(&buf[..read as usize]).map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })();
+        for h in [req, conn, session] {
+            if !h.is_null() {
+                let _ = WinHttpCloseHandle(h);
+            }
+        }
+        if result.is_err() {
+            let _ = std::fs::remove_file(dest);
+        }
+        result
+    }
+}
+
+/// Le périphérique Plug-and-Play d'une interface réseau est-il présent ? (identifiant PnP lu dans
+/// HKLM\…\Network\{classe}\{interface}\Connection\PnPInstanceId, puis CM_Locate_DevNode « normal »).
+fn pnp_present(guid: &windows::core::GUID) -> bool {
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{CM_Locate_DevNodeW, CM_LOCATE_DEVNODE_NORMAL, CR_SUCCESS};
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let g = guid;
+    let key = format!(
+        r"SYSTEM\CurrentControlSet\Control\Network\{{4D36E972-E325-11CE-BFC1-08002BE10318}}\{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}\Connection",
+        g.data1, g.data2, g.data3, g.data4[0], g.data4[1], g.data4[2], g.data4[3], g.data4[4], g.data4[5], g.data4[6], g.data4[7]
+    );
+    let mut buf = [0u16; 512];
+    let mut size = (buf.len() * 2) as u32;
+    unsafe {
+        let r = RegGetValueW(HKEY_LOCAL_MACHINE, &HSTRING::from(key), w!("PnPInstanceId"), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut size));
+        if r.is_err() {
+            return true; // inconnu : on affiche la carte (comportement d'avant)
+        }
+        let mut devinst = 0u32;
+        CM_Locate_DevNodeW(&mut devinst, PCWSTR(buf.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS
+    }
+}
 
 /// Empreinte des cartes réseau matérielles (nom + état). Lecture native, instantanée :
 /// sert à détecter un branchement (ex. adaptateur USB) sans relancer PowerShell en boucle.
@@ -1273,6 +1455,47 @@ mod tests {
         super::reg_delete_tree(r"Software\KaneRegTest");
         assert!(super::reg_get(key, None).is_none());
     }
+    /// Téléchargement natif avec redirection GitHub (fichier public de Kane) : `cargo test telechargement -- --ignored`
+    #[test]
+    #[ignore]
+    fn telechargement_https() {
+        let dest = std::env::temp_dir().join(format!("kane-latest-{}.json", std::process::id()));
+        super::http_download("https://github.com/Kaynegiordano/kane-explorer/releases/latest/download/latest.json", &dest).unwrap();
+        let txt = std::fs::read_to_string(&dest).unwrap();
+        let _ = std::fs::remove_file(&dest);
+        assert!(txt.contains("\"version\""), "{txt}");
+        assert!(super::http_download("https://github.com/Kaynegiordano/kane-explorer/releases/download/v0.0.0/absent.zip", &dest).is_err());
+        assert!(!dest.exists());
+    }
+
+    /// Raccourcis de secours : pris quand Kane est actif, rendus sinon (aucune frappe simulée).
+    #[test]
+    fn raccourcis_de_secours() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, VK_F12};
+        let mods = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT;
+        let free = || unsafe {
+            let ok = RegisterHotKey(None, 99, mods, VK_F12.0 as u32).is_ok();
+            if ok {
+                let _ = UnregisterHotKey(None, 99);
+            }
+            ok
+        };
+        if !free() {
+            eprintln!("Ctrl+Maj+F12 déjà pris par un autre logiciel : test ignoré");
+            return;
+        }
+        super::start_hotkeys(|_, _| {});
+        while super::HOTKEY_THREAD.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        super::hotkeys_active(true);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!free(), "Kane actif : le raccourci doit être réservé");
+        super::hotkeys_active(false);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(free(), "Kane inactif : le raccourci doit être rendu");
+    }
+
     /// Noms traduits par Windows et dossier « Captures d'écran » (lecture seule).
     #[test]
     fn noms_traduits() {
