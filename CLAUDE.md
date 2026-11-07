@@ -10,8 +10,9 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.20.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
-- Dossier local : `D:\Claude Code\kane-explorer`
+- Version actuelle : **1.21.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Dossier local : `C:\KaneOS\kane-explorer` (depuis le 07/11/2026 ; l'ancien `D:\Claude Code\kane-explorer` n'existe plus ;
+  exclu du dépôt KaneOS par `C:\KaneOS\.git\info\exclude`, sans toucher à son .gitignore)
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
 
 ## 2. L'utilisateur
@@ -51,7 +52,7 @@ Installateur NSIS ~2 Mo, en français.
 | `src/meta.js` | Notes en étoiles (`kRatings`), colonnes personnalisables (`COLS`, `visibleColumns`, `--cols`), cache de métadonnées |
 | `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
 | `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoMoves`, `recordPaste`) |
-| `src/archive.js` | Archives comme dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`) |
+| `src/archive.js` | Archives (1.21.0, 7-Zip) : parcourues comme des dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`), cartes de progression, mot de passe, extraire ici / vers…, copier, glisser, compresser (voir « Archives : 7-Zip intégré ») |
 | `src/studio.js` | 1.6.0, chargé en dernier : barre des filtres IA (`renderAiBar`, `aiFacets`, `AI_FACETS` → recherche `p:`), images similaires (`openSimilar`), avant / après (`openSlider`, `vw.mode = 'slider'`, `vw.back` = retour à la visionneuse), mosaïque des dossiers en grille (`folderVisual`, `t.previews`) |
 | `src/actions.js` | 1.11.0, chargé en tout dernier : enveloppe `featureItemMenu`, `fileToolsMenu` et `featureBlankMenu` (réaffectation des fonctions globales). `pickFolder(title, lead)` (boîte de choix : onglets ouverts, épinglés, accès rapide, récents, lecteurs ; filtre, ↑ ↓, ou chemin collé + Entrée ; vérifié par `path_states`), `copyMoveTo` (F7 = Copier vers, F8 = Déplacer vers ; passe par `pasteWithPrompt` + `recordPaste`, donc conflits et Ctrl+Z), `compareFolders` (`compare_dirs` ; lignes cochables, Copier vers la droite / la gauche = `paste` avec `decisions: replace` groupé par dossier de destination, `make_dirs` avant ; fichiers remplacés à la Corbeille), `resizeMenu` / `resizeImages`, `makeShortcuts` (`create_shortcut`, `desktop_path`) |
 | `src/kaneos.js` | 1.14.0, chargé après actions.js : modèles d'IA (`MODEL_EXT` = safetensors sft ckpt pt pth gguf). `modelGroups(t)` (mis en cache par liste `t.entries`) associe à chaque modèle ses fichiers voisins de même nom (`COMPANION_SUFFIXES` : .preview.*, .png/.jpg/.webp, .json Forge, .civitai.info, .cm-info.json, .yaml, .txt…) et son aperçu (`PREVIEW_SUFFIXES`). Regroupement (`kane.groupModels`, défaut oui ; pastille de la barre d'état « N fichiers associés masqués » = bascule) : `isCompanionHidden` (appelé par `computeItems`, jamais pendant une recherche), `withCompanions(paths)` (Copier/Couper, Corbeille, glisser, Copier/Déplacer vers), `renameCompanions` / `undoCompanions` (renommage + Ctrl+Z). Enveloppe `weVisual` (tuile = aperçu + pastille `modelKindGuess`), `fileIcon` (vignette en liste), `typeLabel` (« LoRA SAFETENSORS »), `renderStatusExtra`, `wantsAiScan` (les aperçus regroupés ne déclenchent pas la barre IA), `previewExtras` / `extraActions` / `previewAction` (fiche `model_info`, actions `m-*` : copier `<lora:nom:poids>`, mots déclencheurs, tags, page Civitai), `featureItemMenu` (« Ouvrir dans Kane App (Retouche) », `kanevas_open`). `peek.js` montre l'aperçu d'un modèle au survol (`modelPreview`) |
@@ -65,7 +66,8 @@ Installateur NSIS ~2 Mo, en français.
 | `src-tauri/src/imgtools.rs` | `strip_metadata` : copie « nom_partage » sans prompt ni EXIF, sans réencoder (PNG : retire tEXt/iTXt/zTXt/eXIf/tIME ; JPEG : APP1/APP13/COM, garde APP2 ICC ; WebP : EXIF/XMP + drapeaux VP8X) ; `clipboard_image` : PNG + DIB v5 32 bits pour le presse-papiers |
 | `src-tauri/src/video.rs` | `ffmpeg_path` (PATH, sinon `<lecteur>:\KaneOS\KaneClip\bin`, `KanevasData\bin`, KaneClip installé ; mis en cache), `save_frame` (première : `-frames:v 1` ; dernière : `-sseof -3 … -fps_mode passthrough -update 1`, repli sur la vidéo entière ; instant : `-ss t`), PNG temporaire caché puis renommé |
 | `src-tauri/src/heif.rs` | HEIC / HEIF / AVIF : `open_any` (WIC via `win::wic_decode`, sinon crate `image`), `exif_from_heif` (boîtes `meta` → `iinf` item « Exif » → `iloc`, fichier ou `idat`), `exif_set_upright`, `embed_exif` (APP1 JPEG, eXIf PNG) |
-| `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete »), `archive_list` / `archive_extract(_temp)` via `tar.exe` (chemin absolu System32) |
+| `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete ») |
+| `src-tauri/src/archive.rs` | Archives par 7-Zip intégré (1.21.0) : `list`, `extract`, `extract_temp`, `create`, `cancel`, dossiers provisoires (`staging`, `discard`, `finish_folder`), `cleanup_temp` |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
 | `src-tauri/src/win.rs` | Intégration Win32/COM (crate `windows` 0.62) |
 | `src-tauri/src/extras.rs` | Métadonnées IA, projets/Git, Wallpaper Engine, analyse disque, doublons, renommage, ffmpeg, réseau |
@@ -110,13 +112,40 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
   au-delà de 90 % (Windows plafonne parfois à 1280 px). Pendant un déplacement la capture du pointeur fait de la scène la cible du `dblclick`.
   Comparaison : un seul zoom partagé `vw.cz = {s,nx,ny}` (décalage en fraction de la taille de chaque image : `cmpApply`,
   `cmpZoomAt`, `cmpPanStart`) ; `zoomAt` / `zoomReset` / `zoomToggleReal` aiguillent vers la comparaison si `vw.mode === 'compare'`.
-- **Glisser depuis une archive** (`dragVirtual` / `extractForDrag`, archive.js) : les éléments sont extraits dans `%TEMP%\KaneArchive`
-  au départ du glisser (bouton encore enfoncé, sinon message « recommencez »), puis `start_drag` normal : fonctionne vers n'importe
-  quelle fenêtre (Explorateur, autre Kane, autre logiciel). Vérifié avec une cible WinForms (FileDrop reçu, fichier existant).
-- **Zips** (`fsx.rs` : `zip_list` / `zip_extract`, crate `zip` avec `deflate` + `deflate64`) : lus par la bibliothèque, car `tar.exe` refuse
-  Deflate64 (« Unsupported ZIP compression method (9) », zips de 7-Zip/WinRAR…) ; repli sur `tar.exe` si la bibliothèque échoue
-  (méthode inconnue). Les autres formats (7z, rar, tar, iso) restent sur `tar.exe`. `unzip_here` passe aussi par `archive_extract`.
-  Banc d'essai : un vrai zip Deflate64 (RevoUninstaller_Portable.zip, Téléchargements).
+- **Archives : 7-Zip intégré** (1.21.0, `archive.rs` + `archive.js`, remplace tar.exe et la crate `zip`, qui ne sert plus
+  qu'à upscale.rs). `src-tauri/resources/7zip` = 7z.exe + 7z.dll + License.txt copiés de 7-Zip 26.05 x64 (LGPL + unRAR :
+  redistribuable, licence jointe), installés dans `$INSTDIR\7zip` (`bundle.resources`) ; `seven()` cherche aussi
+  `target\debug\7zip` (copié par tauri-build), puis un 7-Zip installé. Ce qui ne marchait pas avec tar.exe (mesuré le 07/11/2026) :
+  noms japonais / emoji sautés en silence ET code 1 → ouvrir n'importe quel fichier de l'archive échouait ; `-a -c` (Compresser en
+  ZIP) **plantait** (0xC0000005) sur ces noms et changeait `’ — Œ` en `' - O` ; pas de mot de passe ; ISO de 18 Go lu en 13 s
+  (7-Zip : 5–6 s) ; aucun progrès ni arrêt ; `%TEMP%\KaneArchive` jamais vidé (11 Go chez l'utilisateur).
+  - Commandes 7-Zip : `-sccUTF-8 -scsUTF-8` partout ; noms voulus passés par **fichier liste** UTF-8 + `-spd` (pas de jokers,
+    pas de limite de ligne de commande) ; un dossier listé = tout son contenu. **Toujours un `-p`** en liste / extraction
+    (mot de passe factice `NO_PASSWORD` si inconnu) : sans lui 7-Zip attendrait une saisie ; « Wrong password » / « encrypted
+    archive » → sentinelle `MOT_DE_PASSE` → `withPassword` (archive.js) demande et réessaie (mémorisé pour la session).
+    **Jamais de `-p` pour `a`** (l'archive serait chiffrée). Zip créés : `-mcu=on` (UTF-8), `-ssw`.
+  - `.tar.gz/.tgz/.tar.xz…` (`compound_tar`) : 7-Zip n'y voit qu'un .tar → deux 7-Zip en tube (`x -so` → `l|x -si -ttar`),
+    la progression vient de la sortie d'erreur du premier (`-bsp2`). Les types chaînés `-tgzip.tar` / `-ttar.gzip` ne marchent pas.
+  - Progression : `-bsp1` (sortie découpée sur \r \n \b, `parse_pct`), évènement `archive-progress {job,pct,file}`, carte
+    empilée dans `#arch-cards` (classe `copy-card`, Annuler → `archive_cancel` tue les processus). 7-Zip abrège le milieu des
+    chemins longs (« debut . fin ») : la carte n'affiche que la fin.
+  - Vieux zip de l'ancien « Compresser en ZIP » (tar.exe : noms CP850 marqués Unix) : 7-Zip y met des U+EF80–EFFF ;
+    `list` relit alors avec `-mcp=1` (page OEM) et `zip_needs_oem` le rappelle pour l'extraction (test `ancien_zip_tar`).
+  - Dates : 7-Zip donne l'heure **locale** « AAAA-MM-JJ HH:MM:SS » (champ `mtime`), convertie par `localMs` en JS.
+  - Extraire (`extractTo`) : dossier provisoire « <nom> (extraction en cours) » créé DANS la destination (même disque), puis
+    `pasteWithPrompt(…, cut)` = renommages instantanés + fenêtre de conflits de Kane ; `archive_discard` ne supprime qu'un
+    dossier finissant par ce suffixe. Modes : `merge` (sélection, à plat sous `prefix`), `folder` (« nom de l'archive »),
+    `here` (un seul élément à la racine → posé tel quel, sinon dossier). Menus : `archiveFileMenu` (dossier ordinaire :
+    Extraire ici / dans « nom » / vers…, Parcourir le contenu pour un .iso, Compresser en ZIP / 7z), `virtualItemMenu`.
+  - Temporaire `%TEMP%\KaneArchive\<hash chemin+taille+date>` (+ marqueur `.kane-utilise`), effacé au démarrage après 24 h sans
+    usage (`cleanup_temp`) ; fichiers déjà extraits réutilisés. Au-delà de `BIG_ITEM` (512 Mo) jamais de temporaire : ouvrir =
+    question puis extraction à côté de l'archive ; Ctrl+C = « Extraire vers… » ; glisser = glisser interne `dragVirtualBig`
+    (fantôme `.arch-ghost`, dépôt sur un dossier / onglet / favori de Kane → extraction directe). Petits éléments : Ctrl+C =
+    extraction temporaire + `clipboard_set`, glisser = temporaire + `start_drag`. Un .exe/.bat/.msi s'ouvre avec tout son dossier.
+  - Un `.iso` ne s'ouvre plus comme un dossier au double-clic (`isBrowsableArchive`) : Windows le monte (jeux, émulateurs) ;
+    « Parcourir le contenu » dans le clic droit.
+  - Bancs d'essai : `cargo test --lib archive` (aller-retour réel zip/7z avec noms japonais, emoji, typographie, chiffrement
+    -mhe) ; en réel par CDP : ISO de 18 Go (173 000 entrées, Téléchargements), Seedbox.zip 39 Go (Zip64 « Store »).
 - **Tri par dossier** (`kSortBy` = `kane.sortByFolder`, `syncSort` / `setSort`, main.js) : `prefs.sortKey / sortDir` reflètent le tri du dossier de
   l'onglet actif (`syncSort` au début de `computeItems`) ; en-têtes et menu « Trier par » passent par `setSort(key, dir)` qui n'écrit que pour ce
   dossier (clé = chemin en minuscules ; nom croissant = pas d'entrée ; 800 dossiers max). Les anciens `kane.sortKey/sortDir` globaux sont supprimés.
@@ -321,6 +350,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.18.1 | Conversions : images en JPG, PNG, WebP, AVIF, GIF, BMP, TIFF, ICO ; vidéos en MP4 H.264 / H.265, WebM, MKV, GIF, son MP3 / WAV ; sons en MP3, M4A, Opus, FLAC, WAV (sous-menu « Convertir en › », éventail du menu circulaire avec explication de chaque format). Fichiers associés des modèles d'IA suivis aussi par le renommage en lot, Ranger et le ZIP. Accueil, Ce PC, Bibliothèques et Galerie ouverts par d'autres programmes repris par Kane. « En administrateur » réservé aux exe / bat / cmd ; Maj ou Ctrl seuls ne ferment plus le menu circulaire |
 | 1.19.0 | Menu circulaire ramené à l'essentiel : seulement sur les images et vidéos, un anneau de formats de conversion (plus de menu Ouvrir / Copier / Marquer / Corbeille, d'éventails ni de bandeau). Colonnes de la liste : le séparateur entre deux colonnes suit le pointeur et répartit la largeur entre ses deux voisines (Nom compris), double-clic = largeurs d'origine, en-têtes tronqués avec « … » |
 | 1.20.0 | Menu circulaire et « Convertir en » étendus : PDF en images (PNG, JPG, WebP ; un dossier si plusieurs pages), images en PDF (plusieurs images = un seul PDF), sons (MP3, M4A, Opus, FLAC, WAV) |
+| 1.21.0 | Archives refaites avec 7-Zip intégré : noms japonais / emoji / accents, mots de passe, RAR5, ISO, tar.gz, cab, volumes .001 ; progression et Annuler ; Extraire ici (intelligent) / dans « nom » / vers…, sans doublon de dossier ; Ctrl+C depuis une archive ; gros fichiers (> 512 Mo) jamais copiés dans le dossier temporaire (glisser vers un dossier de Kane, extraction à côté de l'archive), temporaire vidé après 24 h ; Compresser en ZIP ou 7z sans planter ; dates d'origine conservées ; un .iso est monté par Windows au double-clic. Corrections : « Garder les deux » sur un dossier fusionnait et dupliquait chaque fichier en « (2) » ; un rafraîchissement automatique annulait l'ouverture d'une archive ou d'un dossier lent |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -362,12 +392,22 @@ renommage en lot, miniatures, OneDrive (affichage), registre (test sur clé temp
 **Non testé à la souris** : téléchargement du moteur d'agrandissement (le PC de dev réutilise celui de KaneClip), visionneuse au clavier, survol vidéo, conversions ffmpeg (ffmpeg non installé), bascule
 réseau (couperait la connexion), aperçu d'un vrai .docx (Office absent), installateur interactif et Windows + E,
 installation d'une mise à jour depuis l'application.
+**Archives 1.21.0, non testé en réel** : RAR (aucun outil pour en créer ici ; 7-Zip les lit), vrais volumes multiples (.7z.001 +
+.002, .part1.rar), ISO de Windows en UDF, ouverture d'un .exe avec son dossier, Ctrl+C vers le presse-papiers (évité pour ne
+pas écraser celui de l'utilisateur ; `extract_temp` testé), glisser d'un petit élément vers un autre logiciel (chemin inchangé).
 
 Limites connues : « Afficher dans le dossier » des autres logiciels ouvre l'Explorateur si Kane n'est pas lancé et si le mode arrière-plan est désactivé (sinon : repris par Kane, 1.7.0 / 1.8.0) ; Corbeille/Panneau
 de configuration restent à l'Explorateur ; le module d'aperçu des polices Windows n'affiche rien hors Explorateur
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **Microsoft Defender (fausses alertes `!ml`)** : le 05/11/2026 il a mis en quarantaine Kane 1.20.0 installé et son
+  installateur (`Trojan:Win32/Bearfoos.A!ml`) ; le 07/11 il supprime à chaque compilation
+  `target\debug\build\tauri-*\build-script-build.exe` (`Trojan:Script/Wacatac.H!ml`). Heuristiques sur des exe neufs non
+  signés. Lire l'historique : `Get-MpThreatDetection` / `Get-MpThreat` (sans droits). Exclusions et signature = décision de
+  l'utilisateur (Claude ne modifie pas les réglages de sécurité). Si le programme de compilation a été supprimé, cargo le
+  recompile (nouvelle alerte) ; une compilation incrémentale de Kane seul n'y touche pas.
 
 - **Images d'une vidéo** (1.13.0) : exactitude vérifiée au pixel près (framemd5 rgb48) contre une référence décodée en entier : vidéos synthétiques 1,2 s (plus courte que la fenêtre `-sseof -3`) et 7 s (test `video::tests`), WebM de ComfyUI (192 images), MOV d'iPhone (587 images), capture à 1,5 s ; vidéo avec rotation 90° → PNG en portrait (rotation automatique de ffmpeg). Vidéos HDR (HEVC 10 bits PQ) : pas de conversion de tons, le PNG peut paraître terne.
 - **PDF** (1.20.0, `pdf.rs`) : crate `windows` 0.62, fonctionnalités `Data_Pdf`, `Foundation`, `Storage`, `Storage_Streams`, `UI` ; les opérations asynchrones s'attendent avec `.join()` (crate `windows-future`), pas `.get()` ; `CoInitializeEx(MTA)` au début de la fonction (fil de `spawn_blocking`). Pas de miniature PDF garantie chez l'utilisateur : le centre de la roue montre l'icône du fichier (`rdThumb`). Documents Office (Word…) non convertibles : il faudrait Office installé.

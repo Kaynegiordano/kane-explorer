@@ -14,6 +14,7 @@ mod copyeng;
 mod columns;
 mod extras;
 mod fsx;
+mod archive;
 mod upscale;
 mod imgtools;
 mod heif;
@@ -551,7 +552,8 @@ enum Act {
 type PasteOp = (String, String, Option<String>);
 
 /// Prépare les opérations de copie / déplacement d'un élément selon la décision prise pour lui.
-/// Dossier déjà présent : on fusionne (la décision vaut pour chaque fichier de même nom à l'intérieur).
+/// Dossier déjà présent : « Remplacer » / « Ignorer » fusionnent (la décision vaut pour chaque fichier de même nom
+/// à l'intérieur) ; « Garder les deux » crée « nom (2) ».
 fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collections::HashSet<String>, out: &mut Vec<PasteOp>, merged: &mut Vec<PathBuf>, replaced: &mut Vec<PathBuf>) {
     let Some(name) = src.file_name().map(|n| n.to_string_lossy().into_owned()) else { return };
     let target = dest_dir.join(&name);
@@ -561,7 +563,9 @@ fn plan_paste(src: &Path, dest_dir: &Path, act: Act, reserved: &mut std::collect
         out.push((src.to_string_lossy().into_owned(), dest_dir.to_string_lossy().into_owned(), None));
         return;
     }
-    if src.is_dir() && target.is_dir() {
+    // Deux dossiers du même nom : « Fusionner » (remplacer / garder l'existant) ; « Garder les deux » = « nom (2) »
+    // (avant 1.21.0, il fusionnait aussi et dupliquait chaque fichier en « fichier (2) » à l'intérieur)
+    if src.is_dir() && target.is_dir() && act != Act::Both {
         merged.push(src.to_path_buf());
         if let Ok(rd) = fs::read_dir(src) {
             for child in rd.flatten() {
@@ -1435,19 +1439,68 @@ async fn trash_restore(paths: Vec<String>) -> Result<Vec<String>, String> {
     blocking(move || fsx::trash_restore(&paths)).await?
 }
 
-#[tauri::command]
-async fn archive_list(archive: String) -> Result<Vec<fsx::ArchEntry>, String> {
-    blocking(move || fsx::archive_list(&archive)).await?
+/* ---------- Archives : 7-Zip intégré (archive.rs) ---------- */
+
+/// Fonction d'avancement d'un travail d'archive : évènement `archive-progress` vers la fenêtre qui l'a lancé.
+fn archive_progress(window: &WebviewWindow, job: u32) -> impl FnMut(u32, &str) + Send + 'static {
+    let (app, label) = (window.app_handle().clone(), window.label().to_string());
+    move |pct: u32, file: &str| {
+        let _ = app.emit_to(label.as_str(), "archive-progress", serde_json::json!({ "job": job, "pct": pct, "file": file }));
+    }
 }
 
 #[tauri::command]
-async fn archive_extract(archive: String, names: Vec<String>, dest: String) -> Result<(), String> {
-    blocking(move || fsx::archive_extract(&archive, &names, &dest)).await?
+async fn archive_list(job: u32, archive: String, password: Option<String>) -> Result<archive::ArchList, String> {
+    blocking(move || archive::list(job, &archive, password.as_deref())).await?
 }
 
 #[tauri::command]
-async fn archive_extract_temp(archive: String, name: String) -> Result<String, String> {
-    blocking(move || fsx::archive_extract_temp(&archive, &name)).await?
+async fn archive_stamp(archive: String) -> Result<String, String> {
+    blocking(move || archive::stamp(&archive)).await
+}
+
+#[tauri::command]
+async fn archive_extract(window: WebviewWindow, job: u32, archive: String, names: Vec<String>, dest: String, password: Option<String>) -> Result<Option<String>, String> {
+    let mut progress = archive_progress(&window, job);
+    blocking(move || archive::extract(job, &archive, &names, &dest, password.as_deref(), &mut progress)).await?
+}
+
+#[tauri::command]
+async fn archive_extract_temp(window: WebviewWindow, job: u32, archive: String, names: Vec<String>, password: Option<String>) -> Result<Vec<String>, String> {
+    let mut progress = archive_progress(&window, job);
+    blocking(move || archive::extract_temp(job, &archive, &names, password.as_deref(), &mut progress)).await?
+}
+
+/// Compresse en .zip ou .7z (nom libre dans le dossier des éléments). Renvoie (archive créée, avertissement).
+#[tauri::command]
+async fn archive_create(window: WebviewWindow, job: u32, paths: Vec<String>, name: String, format: String) -> Result<(String, Option<String>), String> {
+    let mut progress = archive_progress(&window, job);
+    blocking(move || {
+        let parent = Path::new(paths.first().ok_or("Rien à compresser")?).parent().ok_or("Chemin invalide")?.to_path_buf();
+        let out = archive::free_name(&parent, &name).to_string_lossy().into_owned();
+        archive::create(job, &paths, &out, &format, &mut progress).map(|w| (out, w))
+    })
+    .await?
+}
+
+#[tauri::command]
+fn archive_cancel(job: u32) {
+    archive::cancel(job);
+}
+
+#[tauri::command]
+async fn archive_staging(parent: String, label: String) -> Result<String, String> {
+    blocking(move || archive::staging(&parent, &label)).await?
+}
+
+#[tauri::command]
+async fn archive_discard(path: String) -> Result<(), String> {
+    blocking(move || archive::discard(&path)).await?
+}
+
+#[tauri::command]
+async fn archive_finish_folder(staging: String, prefix: String, name: String) -> Result<String, String> {
+    blocking(move || archive::finish_folder(&staging, &prefix, &name)).await?
 }
 
 #[tauri::command]
@@ -1465,15 +1518,6 @@ async fn create_file(parent: String, name: String, content: String) -> Result<St
     blocking(move || extras::create_file(Path::new(&parent), name.trim(), &content)).await?
 }
 
-#[tauri::command]
-async fn zip_paths(paths: Vec<String>, zip_name: String) -> Result<String, String> {
-    blocking(move || extras::zip_paths(&paths, &zip_name)).await?
-}
-
-#[tauri::command]
-async fn unzip_here(archive: String) -> Result<String, String> {
-    blocking(move || extras::unzip_here(&archive)).await?
-}
 
 #[tauri::command]
 async fn dir_info(path: String) -> Result<extras::DirInfo, String> {
@@ -2152,6 +2196,9 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || responder.respond(thumb_response(&uri)));
         })
         .setup(|app| {
+            // 7-Zip intégré (ressources) ; extractions temporaires inutilisées depuis 24 h effacées
+            archive::init(app.path().resource_dir().ok());
+            std::thread::spawn(|| archive::cleanup_temp(std::time::Duration::from_secs(24 * 3600)));
             let background = std::env::args().any(|a| a == "--background");
             BACKGROUND_ON.store(background || background_registered(), std::sync::atomic::Ordering::Relaxed);
             #[cfg(windows)]
@@ -2248,13 +2295,17 @@ pub fn run() {
             file_columns,
             trash_restore,
             archive_list,
+            archive_stamp,
             archive_extract,
             archive_extract_temp,
+            archive_create,
+            archive_cancel,
+            archive_staging,
+            archive_discard,
+            archive_finish_folder,
             move_items,
             remove_empty_dirs,
             create_file,
-            zip_paths,
-            unzip_here,
             read_text,
             places,
             drives,
@@ -2295,4 +2346,31 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+
+    /// « Garder les deux » sur un dossier déjà présent : « Projet (2) », sans rien fusionner ni dupliquer dedans.
+    #[test]
+    fn garder_les_deux_dossier() {
+        let base = std::env::temp_dir().join(format!("kane-paste-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (src, dest) = (base.join("src").join("Projet"), base.join("dest"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(dest.join("Projet")).unwrap();
+        fs::write(src.join("a.txt"), b"1").unwrap();
+        fs::write(dest.join("Projet").join("a.txt"), b"2").unwrap();
+        let (mut reserved, mut ops, mut merged, mut replaced) = (Default::default(), Vec::new(), Vec::new(), Vec::new());
+        plan_paste(&src, &dest, Act::Both, &mut reserved, &mut ops, &mut merged, &mut replaced);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].2.as_deref(), Some("Projet (2)"));
+        assert!(merged.is_empty() && replaced.is_empty());
+        // « Ignorer » (= fusionner en gardant l'existant) : fusion, rien à copier pour a.txt
+        let (mut reserved, mut ops, mut merged, mut replaced) = (Default::default(), Vec::new(), Vec::new(), Vec::new());
+        plan_paste(&src, &dest, Act::Skip, &mut reserved, &mut ops, &mut merged, &mut replaced);
+        assert!(ops.is_empty() && merged.len() == 1);
+        let _ = fs::remove_dir_all(&base);
+    }
 }

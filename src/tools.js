@@ -265,33 +265,7 @@ async function newFile() {
   } catch (e) { toast(cleanError(e), 'error'); }
 }
 
-async function zipSelection(sel) {
-  if (blockedVirtual()) return;
-  const first = sel[0];
-  const name = sel.length === 1 ? `${first.is_dir ? first.name : first.name.replace(/\.[^.]+$/, '')}.zip` : 'Archive.zip';
-  const slow = setTimeout(() => toast('Compression en cours…'), 500);
-  try {
-    const out = await invoke('zip_paths', { paths: withCompanions(sel.map((e) => e.path)), zipName: name });
-    toast(`« ${basename(out)} » créé`);
-    pushUndo(`Compression « ${basename(out)} »`, () => undoCreate([out]));
-    await refresh(true);
-    selectPath(out);
-  } catch (e) { toast(cleanError(e), 'error'); }
-  clearTimeout(slow);
-}
-
-const EXTRACTABLE = set('zip 7z tar tgz rar iso');
-async function extractHere(e) {
-  const slow = setTimeout(() => toast('Extraction en cours…'), 500);
-  try {
-    const out = await invoke('unzip_here', { archive: e.path });
-    toast(`Extrait dans « ${basename(out)} »`);
-    pushUndo(`Extraction dans « ${basename(out)} »`, () => undoCreate([out]));
-    await refresh(true);
-    selectPath(out);
-  } catch (err) { toast(cleanError(err), 'error'); }
-  clearTimeout(slow);
-}
+/* Compresser / Extraire : archive.js (7-Zip intégré depuis 1.21.0) */
 
 /** « Copier le chemin sous forme de… » : formats utiles pour un terminal, WSL, un navigateur ou du code. */
 function pathFormatMenu(paths) {
@@ -321,8 +295,7 @@ function toolItemMenu(sel, one) {
   const items = ['-'];
   if (sel.some((e) => !e.is_dir)) items.push({ label: 'Note…', kbd: 'Alt+1…5', run: () => ratingMenu(sel.filter((e) => !e.is_dir).map((e) => e.path)) });
   items.push({ label: sel.length > 1 ? `Ajouter ${sel.length} éléments à l’étagère` : 'Ajouter à l’étagère', run: () => shelfAdd(sel.map((e) => ({ path: e.path, isDir: e.is_dir }))) });
-  items.push({ label: 'Compresser en ZIP', run: () => zipSelection(sel) });
-  if (one && !one.is_dir && EXTRACTABLE.has(one.ext)) items.push({ label: 'Extraire ici', run: () => extractHere(one) });
+  items.push(...archiveFileMenu(sel)); // Extraire ici / dans « … » / vers…, Compresser en ZIP / 7z (archive.js)
   if (sel.filter((e) => !e.is_dir).length > 1) items.push({ label: 'Ranger la sélection…', run: openOrganize });
   items.push({ label: 'Copier le chemin sous forme de…', run: () => pathFormatMenu(sel.map((e) => e.path)) });
   return items;

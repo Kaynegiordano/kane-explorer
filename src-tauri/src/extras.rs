@@ -924,42 +924,6 @@ pub fn create_file(parent: &Path, name: &str, content: &str) -> Result<String, S
     Ok(target.to_string_lossy().into_owned())
 }
 
-/// Compresse des éléments d'un même dossier en .zip (tar.exe fourni avec Windows 10/11).
-pub fn zip_paths(paths: &[String], zip_name: &str) -> Result<String, String> {
-    let first = paths.first().ok_or("Rien à compresser")?;
-    let parent = Path::new(first).parent().ok_or("Chemin invalide")?;
-    let target = free_name(parent, zip_name);
-    let mut cmd = crate::fsx::tar();
-    cmd.args(["-a", "-c", "-f"]).arg(&target).arg("-C").arg(parent);
-    for p in paths {
-        let n = Path::new(p).file_name().ok_or("Chemin invalide")?;
-        if Path::new(p).parent() != Some(parent) {
-            return Err("Les éléments doivent se trouver dans le même dossier".into());
-        }
-        cmd.arg(n);
-    }
-    let out = cmd.output().map_err(|e| format!("tar.exe introuvable ({e})"))?;
-    if !out.status.success() {
-        let _ = fs::remove_file(&target);
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-    Ok(target.to_string_lossy().into_owned())
-}
-
-/// Extrait une archive (.zip, .tar, .7z…) dans un nouveau dossier à côté d'elle.
-pub fn unzip_here(archive: &str) -> Result<String, String> {
-    let arch = Path::new(archive);
-    let parent = arch.parent().ok_or("Chemin invalide")?;
-    let stem = arch.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Archive".into());
-    let dest = free_name(parent, &stem);
-    fs::create_dir(&dest).map_err(|e| e.to_string())?;
-    if let Err(e) = crate::fsx::archive_extract(archive, &[], &dest.to_string_lossy()) {
-        let _ = fs::remove_dir(&dest);
-        return Err(e);
-    }
-    Ok(dest.to_string_lossy().into_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -474,6 +474,18 @@ body.no-anim .sl-box { transition: none; }
 .copy-card .cc-file { font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body.no-anim .copy-card .cc-bar i { transition: none; }
 
+/* 1.21.0 : archives par 7-Zip (archive.js) — cartes de progression empilées, glisser des gros fichiers */
+#arch-cards { position: fixed; right: 18px; bottom: 44px; z-index: 41; display: flex; flex-direction: column-reverse; gap: 8px; pointer-events: none; }
+#arch-cards:empty { display: none; }
+#arch-cards .copy-card { position: static; pointer-events: auto; }
+.arch-card.wait .cc-bar i { width: 32%; animation: arch-wait 1.15s ease-in-out infinite alternate; }
+@keyframes arch-wait { from { margin-left: 0; } to { margin-left: 68%; } }
+body.no-anim .arch-card.wait .cc-bar i { animation: none; width: 100%; opacity: .5; }
+.arch-ghost { position: fixed; z-index: 60; pointer-events: none; max-width: 360px; padding: 6px 10px; border-radius: 6px; background: var(--accent); color: #fff; font-size: 12.5px; box-shadow: 0 6px 18px rgba(0, 0, 0, .3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-action { display: flex; align-items: center; gap: 12px; }
+.toast-action span { flex: 1; }
+.toast-action .btn { height: 26px; padding: 0 10px; flex: none; }
+
 /* 1.11.0 : choisir un dossier, comparer deux dossiers (actions.js) */
 .pf-list { margin: 10px 0 4px; max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .pf-item { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: baseline; text-align: left; padding: 7px 10px; border-radius: 6px; }

@@ -263,6 +263,14 @@ const CLOSE = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>';
 async function navigate(path, { push = true, t = tab, select = null } = {}) {
   if (push && path !== HOME && t.path !== HOME && samePath(path, t.path)) return refresh();
   const id = ++t.loadId;
+  // Pendant le chargement (archive de 18 Go : plusieurs secondes), un rafraîchissement automatique du dossier
+  // affiché (fichier modifié…) ne doit plus annuler la navigation en silence : refresh() attend la suivante.
+  t.navPending = id;
+  try { return await navigateLoad(path, id, { push, t, select }); }
+  finally { if (t.navPending === id) t.navPending = 0; }
+}
+
+async function navigateLoad(path, id, { push, t, select }) {
   let entries = [];
   let virtual = null; // { archive, inner } quand le chemin est dans une archive
   if (path !== HOME) {
@@ -311,6 +319,7 @@ function entrySignature(entries) {
 async function refresh(force = false) {
   const t = tab;
   if (t.path === HOME) { await loadSidebar(); render(); return true; }
+  if (t.navPending) return true; // une navigation est en cours : elle chargera un contenu à jour
   const id = ++t.loadId;
   let entries;
   try { entries = prepare(t.virtual ? await loadArchive(t.virtual, true) : await invoke('list_dir', { path: t.path })); }
@@ -973,7 +982,7 @@ function displayName(e) {
 /** Ouvre un élément. Les dossiers suivent l'option « Ouvrir les dossiers ». */
 async function openEntry(e) {
   if (e.virtual) return e.is_dir ? navigate(e.path) : openVirtual(e); // élément d'une archive (archive.js)
-  if (!e.is_dir && prefs.openArchives && ARCHIVE_EXT.has(e.ext)) return navigate(e.path);
+  if (prefs.openArchives && isBrowsableArchive(e)) return navigate(e.path); // un .iso reste monté par Windows
   if (e.is_dir) {
     if (prefs.openFolders === 'tab') return newTab(e.path);
     if (prefs.openFolders === 'window') return winCall('new_window', { path: e.path });
@@ -1036,7 +1045,7 @@ async function doTrash() {
 
 /** Copier / couper : passe par le presse-papiers Windows (compatible avec l'Explorateur). */
 async function doCopy(cut) {
-  if (blockedVirtual()) return;
+  if (tab.virtual) return archCopy(cut); // depuis une archive : extraction temporaire (archive.js)
   const shown = selectedPaths();
   if (!shown.length) return;
   const paths = withCompanions(shown);
@@ -2201,7 +2210,7 @@ function openOptions() {
       ${check('radial', 'Menu circulaire de conversion : appui long sur une image, une vidéo, un son ou un PDF')}
       ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
       <label class="opt"><input type="checkbox" id="opt-background"> Garder Kane prêt en arrière-plan, lancé avec Windows (sans fenêtre, très léger) : l’Explorateur Windows est remplacé même quand Kane est fermé</label>
-      ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar, iso) comme des dossiers')}
+      ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar.gz…) comme des dossiers (un .iso reste monté par Windows : clic droit → Parcourir le contenu)')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
     </fieldset>
