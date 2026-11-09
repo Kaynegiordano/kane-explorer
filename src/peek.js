@@ -33,6 +33,7 @@ function peekShow(e) {
     `<div class="peek-cap"><b>${esc(e.display || e.name)}</b><span class="peek-dim"></span><span>${esc(fmtSize(e.size))}</span></div>`;
   document.body.append(el);
   peekEl = el;
+  if (AI_EXT.has(e.ext) && !modelPreview(e)) peekAi(e, el); // image IA : prompt, seed, modèle (1.23.0)
   const place = () => {
     if (peekEl !== el) return;
     const w = el.offsetWidth, h = el.offsetHeight;
@@ -49,6 +50,24 @@ function peekShow(e) {
     place();
   });
   media.addEventListener('error', peekHide);
+}
+
+/** Paramètres de génération sous l'aperçu : prompt (4 lignes au plus), seed, modèle, étapes, CFG, taille. */
+async function peekAi(e, el) {
+  const cached = metaOf(e)?.ai;
+  let ai = cached ? { prompt: cached.prompt, params: Object.entries(cached).filter(([k]) => k !== 'prompt') } : null;
+  if (!ai) {
+    const meta = await invoke('image_meta', { path: e.path }).catch(() => []);
+    ai = aiMeta(meta);
+  }
+  if (!ai || peekEl !== el) return;
+  const get = (k) => ai.params.find(([x]) => x === k)?.[1];
+  const facts = [['Seed', get('Seed')], ['Modèle', get('Model')], ['Étapes', get('Steps')], ['CFG', get('CFG scale')], ['Taille', get('Size')]]
+    .filter(([, v]) => v).map(([k, v]) => `<span><b>${k}</b> ${esc(v)}</span>`).join('');
+  el.insertAdjacentHTML('beforeend', `<div class="peek-ai">${ai.prompt ? `<p>${esc(ai.prompt)}</p>` : ''}<div class="peek-facts">${facts}</div></div>`);
+  // L'aperçu a grandi : il reste dans la fenêtre
+  const h = el.offsetHeight;
+  el.style.top = Math.max(8, Math.min(parseFloat(el.style.top) || 8, innerHeight - h - 8)) + 'px';
 }
 
 els.content.addEventListener('pointermove', (ev) => {

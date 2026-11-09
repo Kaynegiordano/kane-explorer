@@ -351,6 +351,22 @@ fn window_app_id(h: HWND) -> Option<String> {
     }
 }
 
+/// Chemin complet du programme qui possède la fenêtre (journal des jeux, games.rs).
+pub fn window_exe_path(h: HWND) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(h, Some(&mut pid));
+        let proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 520];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(proc, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(proc);
+        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
 /// Nom du programme (sans « .exe », en minuscules) qui possède la fenêtre.
 fn window_exe_stem(h: HWND) -> Option<String> {
     use windows::Win32::Foundation::CloseHandle;
@@ -983,6 +999,34 @@ pub fn set_wallpaper(path: &str) -> Result<()> {
             Some(wide.as_mut_ptr() as *mut _),
             SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
         )
+    }
+}
+
+/// Date de prise de vue (ms depuis 1970) : EXIF d'une photo (`System.Photo.DateTaken`), sinon date d'encodage d'une
+/// vidéo de téléphone (`System.Media.DateEncoded`). Vue « Photos » et colonne « Prise de vue » (1.23.0).
+pub fn date_taken(path: &str) -> Option<u64> {
+    use windows::Win32::Storage::EnhancedStorage::{PKEY_Media_DateEncoded, PKEY_Photo_DateTaken};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    use windows::Win32::System::Com::StructuredStorage::PropVariantToFileTime;
+    use windows::Win32::System::Variant::PSTF_UTC;
+    use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreFromParsingName, GPS_DEFAULT};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let store: IPropertyStore = SHGetPropertyStoreFromParsingName(&HSTRING::from(path), None, GPS_DEFAULT).ok()?;
+        for key in [PKEY_Photo_DateTaken, PKEY_Media_DateEncoded] {
+            let Ok(v) = store.GetValue(&key) else { continue };
+            if v.is_empty() {
+                continue;
+            }
+            if let Ok(ft) = PropVariantToFileTime(&v, PSTF_UTC) {
+                let t = ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64;
+                let ms = (t / 10_000).saturating_sub(11_644_473_600_000);
+                if ms > 0 {
+                    return Some(ms);
+                }
+            }
+        }
+        None
     }
 }
 

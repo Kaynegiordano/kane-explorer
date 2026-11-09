@@ -7,13 +7,16 @@ const pendingCalls = new Map();
 const WATCHED_CALLS = new Set(['list_dir', 'drives', 'places', 'path_states', 'dir_count', 'archive_list']);
 let callSeq = 0;
 function invoke(cmd, args) {
-  if (!WATCHED_CALLS.has(cmd)) return rawInvoke(cmd, args);
+  // kaneRetry (boot.js) : appel retenté s'il arrive pendant la naissance de la fenêtre
+  if (!WATCHED_CALLS.has(cmd)) return kaneRetry(() => rawInvoke(cmd, args));
   const id = ++callSeq;
   pendingCalls.set(id, { cmd, at: Date.now(), path: args?.path || args?.archive || '' });
-  return rawInvoke(cmd, args).finally(() => pendingCalls.delete(id));
+  return kaneRetry(() => rawInvoke(cmd, args)).finally(() => pendingCalls.delete(id));
 }
-const { listen } = window.__TAURI__.event;
+const { listen: rawListen } = window.__TAURI__.event;
+const listen = (event, handler) => kaneRetry(() => rawListen(event, handler));
 const HOME = '::home';
+const TRASH = '::trash'; // la Corbeille, affichée par Kane (trash.js, 1.23.0)
 
 // Dimensions de l'affichage virtualisé (doivent correspondre au CSS)
 let ROW_H = 34; // 28 en densité compacte (voir applyLook)
@@ -24,6 +27,8 @@ const GAP = 6;
 const OVERSCAN = 6;
 
 const $ = (id) => document.getElementById(id);
+/** Élément de la zone des fichiers active (#vbody, #vwin) : avec le double panneau, chaque panneau a les siens (dual.js). */
+const paneEl = (id) => els.content.querySelector('#' + id);
 const els = {
   content: $('content'), crumbs: $('crumbs'), address: $('address'), addressInput: $('address-input'),
   search: $('search'), places: $('nav-places'), drives: $('nav-drives'), menu: $('menu'), toasts: $('toasts'),
@@ -100,6 +105,7 @@ function applyLook() {
   }
   ROW_H = prefs.density === 'compact' ? 28 : 34;
   root.style.setProperty('--row-h', ROW_H + 'px');
+  els.content.style.setProperty('--row-h', ROW_H + 'px'); // double panneau : chaque panneau garde sa densité (dual.js)
   applyIconSize();
 }
 
@@ -109,6 +115,8 @@ function applyIconSize() {
   TILE_H = TILE_ICON + 64;
   document.documentElement.style.setProperty('--tile-icon', TILE_ICON + 'px');
   document.documentElement.style.setProperty('--tile-h', TILE_H + 'px');
+  els.content.style.setProperty('--tile-icon', TILE_ICON + 'px'); // (et sa taille d'icônes)
+  els.content.style.setProperty('--tile-h', TILE_H + 'px');
 }
 applyLook();
 setInterval(() => { if (prefs.theme === 'schedule') applyLook(); }, 30000); // bascule clair / sombre à l'heure dite
@@ -273,7 +281,10 @@ async function navigate(path, { push = true, t = tab, select = null } = {}) {
 async function navigateLoad(path, id, { push, t, select }) {
   let entries = [];
   let virtual = null; // { archive, inner } quand le chemin est dans une archive
-  if (path !== HOME) {
+  if (path === TRASH) {
+    try { entries = prepare(await invoke('trash_list')); }
+    catch (e) { if (t === tab) toast(cleanError(e), 'error'); return false; }
+  } else if (path !== HOME) {
     try { entries = prepare(await invoke('list_dir', { path })); }
     catch (e) {
       // Pas un dossier : peut-être une archive (zip, 7z...) parcourue comme un dossier (archive.js)
@@ -293,7 +304,7 @@ async function navigateLoad(path, id, { push, t, select }) {
   }
   noteVisit(path); // dossiers récents de la palette (palette.js)
   if (t.deep?.running) invoke('search_cancel', { job: t.deep.job }).catch(() => {}); // recherche dans les sous-dossiers (search.js)
-  Object.assign(t, { path, entries, virtual, deep: null, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
+  Object.assign(t, { path, entries, virtual, trash: path === TRASH, deep: null, loaded: true, selected: new Set(), anchor: -1, focus: -1, filter: '', scroll: 0 });
   if (t === tab) {
     els.search.value = '';
     watchCurrent();
@@ -324,7 +335,7 @@ async function refresh(force = false) {
   if (t.deep) return deepRefresh(t, force); // résultats d'une recherche dans les sous-dossiers (search.js)
   const id = ++t.loadId;
   let entries;
-  try { entries = prepare(t.virtual ? await loadArchive(t.virtual, true) : await invoke('list_dir', { path: t.path })); }
+  try { entries = prepare(t.trash ? await invoke('trash_list') : t.virtual ? await loadArchive(t.virtual, true) : await invoke('list_dir', { path: t.path })); }
   catch (e) {
     // Onglet restauré dans une archive : le chemin n'est pas un dossier, on le lit comme archive
     const arch = t.virtual ? null : splitArchivePath(t.path);
@@ -395,6 +406,7 @@ function selectPath(p) {
 
 function tabTitle(t) {
   if (t.path === HOME) return 'Accueil';
+  if (t.path === TRASH) return 'Corbeille';
   if (/^[A-Za-z]:\\?$/.test(t.path)) {
     const d = shared.drives.find((d) => samePath(d.path, t.path));
     return d ? driveName(d) : t.path;
@@ -571,7 +583,7 @@ let renaming = false;
 let autoTimer = 0;
 
 function watchCurrent() {
-  invoke('watch_dir', { path: tab.path === HOME || tab.virtual ? null : tab.path }).catch(() => { /* lecteur non surveillable */ });
+  invoke('watch_dir', { path: tab.path === HOME || tab.virtual || tab.trash ? null : tab.path }).catch(() => { /* lecteur non surveillable */ });
 }
 
 listen('dir-changed', (ev) => {
@@ -589,8 +601,8 @@ try { localStorage.removeItem('kane.sortKey'); localStorage.removeItem('kane.sor
 /** Applique à `prefs.sortKey / sortDir` le tri mémorisé pour le dossier de l'onglet actif. */
 function syncSort() {
   const s = kSortBy[(tab?.path || '').toLowerCase()];
-  prefs.sortKey = s?.key || 'name';
-  prefs.sortDir = s?.dir || 1;
+  prefs.sortKey = s?.key || (tab?.trash ? 'deleted' : 'name'); // Corbeille : les dernières suppressions d'abord
+  prefs.sortDir = s?.dir || (tab?.trash ? -1 : 1);
 }
 
 /** Change le tri du dossier affiché (et de lui seul). */
@@ -651,7 +663,7 @@ function saveFolderView() {
 function render() {
   syncFolderView();
   if (tab.path === HOME) { tab.items = []; renderHome(); }
-  else { tab.items = computeItems(); renderFiles(); ensureSortMeta(); }
+  else { tab.items = computeItems(); applyGroups(); renderFiles(); ensureSortMeta(); } // regroupement : groups.js
   renderChrome();
   schedulePreview();
 }
@@ -673,7 +685,7 @@ const view = { cols: 1, stride: ROW_H, first: -1, last: -1 };
 function renderFiles(animate = true, deferWindow = false) {
   view.first = view.last = -1;
   if (!tab.loaded) { els.content.innerHTML = ''; return; }
-  if (!tab.items.length) {
+  if (!tab.items.length && !tab.groups) { // (groupes tous repliés : leurs en-têtes restent affichés)
     els.content.innerHTML = tab.filter
       ? `<div class="empty"><div><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><p>${tab.deep?.running ? 'Recherche dans les sous-dossiers…' : `Aucun résultat pour « ${esc(tab.filter)} »`}</p>` +
         (!tab.deep && !tab.virtual ? '<p class="empty-hint">Entrée : chercher aussi dans tous les sous-dossiers</p>' : '') + '</div></div>'
@@ -694,7 +706,7 @@ function renderFiles(animate = true, deferWindow = false) {
   layoutWindow();
   if (!deferWindow) renderWindow(true); // sinon, le zoom rend après avoir restauré le défilement
   // Petite animation d'entrée, seulement à l'affichage d'un dossier (pas au défilement)
-  const vw = $('vwin');
+  const vw = paneEl('vwin');
   if (animate && prefs.animations) {
     vw.classList.add('enter');
     setTimeout(() => vw.classList.remove('enter'), 450);
@@ -703,17 +715,18 @@ function renderFiles(animate = true, deferWindow = false) {
 
 /** Calcule colonnes et hauteur totale de la zone virtualisée. */
 function layoutWindow() {
-  const vbody = $('vbody');
+  const vbody = paneEl('vbody');
   if (!vbody) return;
   if (prefs.view === 'grid') {
     view.cols = Math.max(1, Math.floor((vbody.clientWidth + GAP) / (TILE_W + GAP)));
     view.stride = TILE_H + GAP;
-    $('vwin').style.gridTemplateColumns = `repeat(${view.cols}, minmax(0, 1fr))`;
+    paneEl('vwin').style.gridTemplateColumns = `repeat(${view.cols}, minmax(0, 1fr))`;
   } else {
     view.cols = 1;
     view.stride = ROW_H;
     els.content.style.setProperty('--cols', colTemplate(listCols));
   }
+  if (tab.groups) { vbody.style.height = buildGroupLayout() + 'px'; return; } // lignes de hauteurs différentes (groups.js)
   const rows = Math.ceil(tab.items.length / view.cols);
   vbody.style.height = rows * view.stride + 'px';
 }
@@ -741,9 +754,10 @@ function itemHtml(e, i) {
 
 /** N'affiche que les éléments visibles (+ une marge) : instantané même avec 100 000 fichiers. */
 function renderWindow(force) {
-  const vbody = $('vbody');
-  const vwin = $('vwin');
+  const vbody = paneEl('vbody');
+  const vwin = paneEl('vwin');
   if (!vbody || !vwin || (renaming && !force)) return;
+  if (tab.vrows) { renderGroupedWindow(force); return; }
   const top = els.content.scrollTop - vbody.offsetTop;
   const rows = Math.ceil(tab.items.length / view.cols);
   const r0 = Math.max(0, Math.floor(top / view.stride) - OVERSCAN);
@@ -780,7 +794,7 @@ new ResizeObserver(() => {
   if (resizeRaf) return;
   resizeRaf = requestAnimationFrame(() => {
     resizeRaf = 0;
-    if (!tab || tab.path === HOME || !$('vbody')) return;
+    if (!tab || tab.path === HOME || !paneEl('vbody')) return;
     // Moins (ou plus) de colonnes qui tiennent : l'en-tête doit être reconstruit
     if (prefs.view === 'list' && visibleColumns(els.content.clientWidth - 48).join() !== listCols.join()) {
       const top = els.content.scrollTop;
@@ -824,6 +838,7 @@ function renderHome() {
 function segments(path) {
   const segs = [{ name: 'Accueil', path: HOME }];
   if (path === HOME) return segs;
+  if (path === TRASH) return [...segs, { name: 'Corbeille', path: TRASH }];
   const m = path.match(/^([A-Za-z]:)\\?(.*)$/);
   if (!m) { segs.push({ name: path, path }); return segs; }
   const root = m[1].toUpperCase() + '\\';
@@ -847,11 +862,17 @@ function renderChrome() {
   if (typeof renderAiBar === 'function') renderAiBar(); // filtres IA (studio.js)
   if (typeof syncSaveBtn === 'function') syncSaveBtn(); // bouton « Enregistrer la recherche » (search.js)
   if (typeof renderDeepBar === 'function') renderDeepBar(); // bandeau « Chercher dans les sous-dossiers » (search.js)
+  if (typeof renderTrashBar === 'function') renderTrashBar(); // bandeau de la Corbeille (trash.js)
+  if (typeof renderRulesBadge === 'function') renderRulesBadge(); // « ⚡ 2 règles » (rules.js)
+  if (typeof paintPaneHeads === 'function') paintPaneHeads(); // en-têtes du double panneau (dual.js)
 
   els.back.disabled = tab.hIndex <= 0;
   els.forward.disabled = tab.hIndex >= tab.history.length - 1;
   els.up.disabled = tab.path === HOME;
-  els.search.disabled = tab.path === HOME;
+  // Accueil : recherche sur tout le PC si l'index est prêt (index.js), sinon rien à filtrer
+  const pcSearch = tab.path === HOME && typeof indexReady === 'function' && indexReady();
+  els.search.disabled = tab.path === HOME && !pcSearch;
+  els.search.placeholder = pcSearch ? 'Rechercher sur tout le PC…' : 'Rechercher… (type:image note:4 p:prompt)';
   els.hidden.classList.toggle('on', prefs.showHidden);
   els.previewBtn.classList.toggle('on', prefs.preview);
   els.viewList.classList.toggle('on', prefs.view === 'list');
@@ -874,9 +895,10 @@ function markActive() {
 function updateActions() {
   const home = tab.path === HOME;
   const n = tab.selected.size;
-  els.newFolder.disabled = els.paste.disabled = els.terminal.disabled = home;
-  els.cut.disabled = els.copy.disabled = els.del.disabled = n === 0;
-  els.rename.disabled = n !== 1;
+  els.newFolder.disabled = els.paste.disabled = els.terminal.disabled = home || !!tab.trash;
+  els.cut.disabled = els.copy.disabled = n === 0 || !!tab.trash;
+  els.del.disabled = n === 0;
+  els.rename.disabled = n !== 1 || !!tab.trash;
   els.props.disabled = els.more.disabled = home && n === 0;
 }
 
@@ -933,11 +955,12 @@ function clearSelection() { tab.selected.clear(); tab.anchor = tab.focus = -1; p
 
 /** Met à jour l'état visuel des éléments affichés sans tout reconstruire. */
 function paintSelection() {
-  const vwin = $('vwin');
+  const vwin = paneEl('vwin');
   if (vwin) {
     for (const el of vwin.children) {
       const i = +el.dataset.i;
       const e = tab.items[i];
+      if (!e) continue; // en-tête de groupe
       el.classList.toggle('sel', tab.selected.has(e.path));
       el.classList.toggle('focus', i === tab.focus);
       el.classList.toggle('cut', shared.cut.has(e.path));
@@ -946,13 +969,15 @@ function paintSelection() {
   updateActions();
   updateStatus();
   schedulePreview();
+  if (tab.trash) renderTrashBar(); // « Restaurer la sélection (N) »
 }
 
 const itemEl = (i) => els.content.querySelector(`.item[data-i="${i}"]`);
 
 function scrollToItem(i) {
-  const vbody = $('vbody');
+  const vbody = paneEl('vbody');
   if (!vbody || i < 0) return;
+  if (tab.vrows) { scrollToItemGrouped(i); return; }
   const c = els.content;
   const head = prefs.view === 'list' ? ROW_H : 0;
   const y = vbody.offsetTop + Math.floor(i / view.cols) * view.stride;
@@ -1028,6 +1053,7 @@ function openSelection() {
 }
 
 async function doTrash() {
+  if (tab.trash) return trashDeleteForever(); // dans la Corbeille : suppression définitive, après confirmation (trash.js)
   if (blockedVirtual()) return;
   const shown = selectedPaths();
   if (!shown.length) return;
@@ -1050,6 +1076,7 @@ async function doTrash() {
 /** Copier / couper : passe par le presse-papiers Windows (compatible avec l'Explorateur). */
 async function doCopy(cut) {
   if (tab.virtual) return archCopy(cut); // depuis une archive : extraction temporaire (archive.js)
+  if (blockedVirtual()) return; // Corbeille : restaurer d'abord
   const shown = selectedPaths();
   if (!shown.length) return;
   const paths = withCompanions(shown);
@@ -1270,7 +1297,7 @@ function setZoomLevel(i) {
   i = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i));
   if (i === zoomLevelIndex()) { showZoomHint(ZOOM_LEVELS[i].name); return; }
   const l = ZOOM_LEVELS[i], previousView = prefs.view;
-  const body = $('vbody');
+  const body = paneEl('vbody');
   const top = Math.max(0, els.content.scrollTop - (body?.offsetTop || 0));
   const anchor = Math.floor(top / view.stride) * view.cols;
   const fraction = (top % view.stride) / view.stride;
@@ -1280,7 +1307,7 @@ function setZoomLevel(i) {
   applyLook();
   // Le zoom ne change ni le tri, ni les données, ni l'aperçu : un seul rendu des éléments.
   if (previousView !== prefs.view) renderFiles(false, true); else layoutWindow();
-  const newBody = $('vbody');
+  const newBody = paneEl('vbody');
   if (newBody) els.content.scrollTop = newBody.offsetTop + (Math.floor(anchor / view.cols) + fraction) * view.stride;
   if (tab.focus >= 0) scrollToItem(tab.focus);
   renderWindow(true);
@@ -1433,8 +1460,9 @@ async function updatePreview() {
     visual = native ? '<div class="pv-visual native" id="pv-native"></div>' : thumb(512, 't');
   }
 
-  const actions =
-    `<button class="primary" data-pv="open">Ouvrir</button>` +
+  const actions = e.deleted
+    ? `<button class="primary" data-pv="restore">Restaurer</button><button data-pv="open">Ouvrir</button><button data-pv="origin">Emplacement d’origine</button><button class="danger" data-pv="nuke">Supprimer définitivement</button>`
+    : `<button class="primary" data-pv="open">Ouvrir</button>` +
     (e.is_dir ? `<button data-pv="tab">Nouvel onglet</button>` : `<button data-pv="openwith">Ouvrir avec…</button>`) +
     `<button data-pv="props">Propriétés</button>` +
     extraActions(e);
@@ -1446,7 +1474,8 @@ async function updatePreview() {
     infoRow('Taille', e.is_dir ? '' : `${fmtSize(e.size)} <span style="color:var(--muted)">(${e.size.toLocaleString('fr-FR')} octets)</span>`) +
     infoRow('Modifié le', fmtDate(e.modified)) +
     infoRow('Créé le', fmtDate(e.created)) +
-    infoRow('Emplacement', esc(parentOf(e.path) || '')) +
+    infoRow(e.deleted ? 'Emplacement d’origine' : 'Emplacement', esc(parentOf(e.origin || e.path) || '')) +
+    infoRow('Supprimé le', fmtDate(e.deleted)) +
     `</dl>`;
   const info = $('pv-info');
   const addInfo = (k, v) => { if (token === previewToken) info.insertAdjacentHTML('afterbegin', infoRow(k, v)); };
@@ -1624,6 +1653,7 @@ function hideMenu() {
 
 function itemMenu() {
   if (tab.virtual) return virtualItemMenu(selectedEntries());
+  if (tab.trash) return trashItemMenu(selectedEntries());
   const sel = selectedEntries();
   const one = sel.length === 1 ? sel[0] : null;
   return [
@@ -1655,7 +1685,7 @@ function sortMenu() {
   const setDir = (d) => setSort(prefs.sortKey, d);
   return [
     { label: mark(prefs.sortKey === 'name') + 'Nom', run: () => setKey('name') },
-    ...Object.entries(COLS).map(([k, c]) => ({ label: mark(prefs.sortKey === k) + c.label, run: () => setKey(k) })),
+    ...Object.entries(COLS).filter(([, c]) => !c.trash || tab.trash).map(([k, c]) => ({ label: mark(prefs.sortKey === k) + c.label, run: () => setKey(k) })),
     '-',
     { label: mark(prefs.sortDir > 0) + 'Croissant', run: () => setDir(1) },
     { label: mark(prefs.sortDir < 0) + 'Décroissant', run: () => setDir(-1) },
@@ -1666,11 +1696,13 @@ function sortMenu() {
 
 function blankMenu() {
   if (tab.virtual) return virtualBlankMenu();
+  if (tab.trash) return trashBlankMenu();
   return [
     { label: 'Nouveau dossier', kbd: 'Ctrl+Maj+N', run: doNewFolder },
     { label: 'Coller', kbd: 'Ctrl+V', run: doPaste },
     '-',
     { label: 'Trier par', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, sortMenu()) },
+    { label: 'Regrouper par', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, groupMenu()) },
     { label: 'Affichage : liste', kbd: 'Ctrl+1', run: () => setView('list') },
     { label: 'Affichage : grandes icônes', kbd: 'Ctrl+2', run: () => setView('grid') },
     { label: (prefs.showHidden ? '✓ ' : '') + 'Éléments masqués', kbd: 'Ctrl+H', run: toggleHidden },
@@ -1730,7 +1762,7 @@ let suppressClick = false;
 let primaryDown = false; // bouton gauche enfoncé (le glisser depuis une archive attend l'extraction)
 els.content.addEventListener('pointerdown', (ev) => {
   const it = ev.target.closest('.item');
-  dragStart = ev.button === 0 && it && !ev.target.closest('.rename-input')
+  dragStart = ev.button === 0 && it && !tab.trash && !ev.target.closest('.rename-input')
     ? { x: ev.clientX, y: ev.clientY, i: +it.dataset.i } : null;
   primaryDown = ev.button === 0;
 });
@@ -1757,7 +1789,7 @@ els.content.addEventListener('pointermove', (ev) => {
 let lasso = null;
 
 function lassoStartAllowed(ev) {
-  if (ev.button !== 0 || tab.path === HOME || renaming || !$('vbody')) return false;
+  if (ev.button !== 0 || tab.path === HOME || renaming || !paneEl('vbody')) return false;
   const c = els.content;
   const r = c.getBoundingClientRect();
   if (ev.clientX >= r.left + c.clientWidth || ev.clientY >= r.top + c.clientHeight) return false; // ascenseur
@@ -1771,7 +1803,8 @@ function lassoStartAllowed(ev) {
 
 /** Indices des éléments touchés par le rectangle (x1,y1)-(x2,y2), en coordonnées locales à #vbody. */
 function lassoHits(x1, y1, x2, y2) {
-  const vbody = $('vbody');
+  if (tab.vrows) return lassoHitsGrouped(x1, y1, x2, y2);
+  const vbody = paneEl('vbody');
   const n = tab.items.length;
   const { cols, stride } = view;
   const hits = [];
@@ -1798,7 +1831,7 @@ function lassoHits(x1, y1, x2, y2) {
 
 function lassoUpdate() {
   const l = lasso;
-  const vbody = $('vbody');
+  const vbody = paneEl('vbody');
   if (!l || !vbody) return;
   const cr = els.content.getBoundingClientRect();
   const vr = vbody.getBoundingClientRect();
@@ -1848,7 +1881,7 @@ els.content.addEventListener('pointerdown', (ev) => {
   lassoEnd(); // jamais de rectangle « fantôme » d'un appui précédent dont le relâchement a eu lieu ailleurs
   if (!lassoStartAllowed(ev)) return;
   dragStart = null; // pas de glisser-déposer de fichiers depuis le vide d'une tuile
-  const vr = $('vbody').getBoundingClientRect();
+  const vr = paneEl('vbody').getBoundingClientRect();
   lasso = {
     sx: ev.clientX - vr.left, sy: ev.clientY - vr.top, px: ev.clientX, py: ev.clientY,
     base: ev.ctrlKey || ev.shiftKey ? new Set(tab.selected) : new Set(),
@@ -1885,7 +1918,7 @@ function dropTargetAt(x, y) {
   const el = document.elementFromPoint(x, y);
   if (!el) return null;
   const pick = (node, path) => (path && path !== HOME ? { el: node, path } : null);
-  const it = el.closest('#content .item');
+  const it = el.closest('.content .item');
   if (it && tab.items[+it.dataset.i]?.is_dir) return pick(it, tab.items[+it.dataset.i].path);
   const card = el.closest('.card');
   if (card) return card.dataset.file ? null : pick(card, card.dataset.path);
@@ -1900,7 +1933,7 @@ function dropTargetAt(x, y) {
   if (crumb) return pick(crumb, crumb.dataset.path);
   const t = el.closest('.tab');
   if (t) return pick(t, tabs.find((x) => x.id === +t.dataset.id)?.path);
-  if (el.closest('#content') && tab.path !== HOME) return { el: els.content, path: tab.path };
+  if (el.closest('.content') && tab.path !== HOME) return { el: els.content, path: tab.path };
   return null;
 }
 
@@ -1917,6 +1950,7 @@ async function dropInto(paths, dest) {
   if (!paths?.length) return;
   if (dest === PIN_ZONE) return pinDropped(paths);
   if (dest === SHELF_ZONE) return shelfDropped(paths);
+  if (dest === TRASH) return trashDropped(paths); // déposé sur la Corbeille : envoyé à la Corbeille (trash.js)
   if (tab.virtual && dest.toLowerCase().startsWith(tab.virtual.archive.toLowerCase())) { blockedVirtual(); return; }
   const mods = await invoke('key_state').catch(() => ({ ctrl: false, shift: false }));
   const drive = (p) => p.slice(0, 2).toLowerCase();

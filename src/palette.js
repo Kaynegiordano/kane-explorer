@@ -7,7 +7,7 @@
 let kRecent = store.get('recent', []);        // [{ path, n, t }]
 
 function noteVisit(path) {
-  if (!path || path === HOME) return;
+  if (!path || path.startsWith('::')) return; // Accueil, Corbeille
   const k = path.toLowerCase();
   const r = kRecent.find((x) => x.path.toLowerCase() === k);
   if (r) { r.n++; r.t = Date.now(); } else kRecent.push({ path, n: 1, t: Date.now() });

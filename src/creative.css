@@ -588,3 +588,56 @@ body.no-anim .arch-card.wait .cc-bar i { animation: none; width: 100%; opacity: 
 .deep-kbd { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
 .row .name small.deep-where { color: var(--muted); font-size: 11.5px; margin-left: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; max-width: 55%; }
 .empty .empty-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+/* Corbeille (trash.js, 1.23.0) */
+#nav-trash .count { margin-left: auto; min-width: 16px; padding: 0 5px; border-radius: 8px; background: var(--hover); color: var(--muted); font-size: 11px; text-align: center; }
+#nav-trash .count:empty { display: none; }
+.trash-bar { background: color-mix(in srgb, var(--danger) 5%, var(--panel)); }
+.trash-bar > svg { stroke: var(--danger); }
+.btn.danger { color: var(--danger); }
+.pv-actions .danger { color: var(--danger); }
+
+/* Regroupement (groups.js, 1.23.0) */
+.group-head { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; box-sizing: border-box; font-size: 13px; color: var(--text); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; }
+.vwin.grid .group-head { grid-column: 1 / -1; }
+.group-head b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.group-head span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.group-head svg { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; transition: transform .15s; }
+.group-head.closed svg { transform: rotate(-90deg); }
+.group-head:hover { background: var(--hover); border-radius: 6px; }
+
+/* Prompt au survol (peek.js, 1.23.0) */
+#peek .peek-ai { padding: 6px 10px 9px; border-top: 1px solid var(--border); font-size: 12px; max-width: 720px; }
+#peek .peek-ai p { margin: 0 0 6px; color: var(--text); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+#peek .peek-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); }
+#peek .peek-facts b { color: var(--text); font-weight: 600; margin-right: 3px; }
+
+/* Règles automatiques (rules.js, 1.23.0) */
+.rule-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.rule-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: 13px; }
+.rule-row select, .rule-row input[type=text] { height: 28px; }
+.rule-row input[data-k=dest] { width: 170px; }
+.rule-row input[data-k=exts] { width: 110px; }
+.rule-row .btn { margin-left: auto; height: 26px; padding: 0 9px; }
+.rule-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 10px; font-size: 12.5px; color: var(--muted); }
+.rule-presets .btn { height: 26px; padding: 0 10px; font-size: 12.5px; }
+.rule-log { font-size: 12px; color: var(--muted); max-height: 150px; overflow: auto; }
+.rule-log b { display: block; color: var(--text); margin-bottom: 4px; }
+.rule-log span { color: var(--muted); margin-right: 6px; }
+.status-rules { border: 0; background: var(--accent-soft); color: var(--accent); border-radius: 10px; padding: 1px 8px; font-size: 11.5px; cursor: pointer; margin-left: 8px; }
+.status-rules[hidden] { display: none; }
+
+/* Double panneau (dual.js, 1.23.0) */
+.workspace > .pane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.workspace > .pane + .pane { border-left: 1px solid var(--border); }
+.pane > .content { flex: 1; min-height: 0; }
+.pane-head { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; flex: none; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); background: var(--panel); white-space: nowrap; overflow: hidden; cursor: default; }
+.pane-head .ficon { width: 16px; height: 16px; flex: none; }
+.pane-head b { color: var(--text); font-weight: 600; }
+.pane-head span { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pane.active .pane-head { box-shadow: inset 0 -2px 0 var(--accent); }
+.pane.active .pane-head b { color: var(--accent); }
+.pane:not(.active) > .content { filter: saturate(.85); }
+.pane-x { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.pane-x:hover { background: var(--hover); color: var(--text); }
+#dual-btn.on { background: var(--accent-soft); color: var(--accent); }

@@ -212,7 +212,7 @@ function deepQuery(text) {
   return { words: parseFilter(text).words, exts: [...exts], dirs };
 }
 
-const deepAvailable = (t = tab) => !!t && t.path !== HOME && !t.virtual && !!t.filter.trim() && parseFilter(t.filter).mode !== 'prompt';
+const deepAvailable = (t = tab) => !!t && t.path !== HOME && !t.virtual && !t.trash && !!t.filter.trim() && parseFilter(t.filter).mode !== 'prompt';
 
 function deepStop(t) {
   if (!t?.deep?.running) return;
@@ -236,6 +236,7 @@ function deepPaint(t, now = false) {
   const top = els.content.scrollTop;
   syncFolderView();
   tab.items = computeItems();
+  applyGroups();
   renderFiles(false);
   ensureSortMeta();
   renderChrome();
@@ -269,6 +270,33 @@ async function deepSearch(text = tab.filter) {
   deepPaint(t, true);
 }
 
+/** Recherche sur tout le PC dans l'index (index.js / index.rs) ; les résultats s'affichent comme ceux des sous-dossiers.
+    Depuis l'accueil, une archive ou la Corbeille : l'onglet passe d'abord au dossier personnel. */
+async function deepSearchPC(text) {
+  text = (text || '').trim();
+  const words = deepQuery(text).words;
+  if (!words.length) { toast('Tapez au moins un mot du nom cherché', 'error'); return; }
+  if (tab.path === HOME || tab.virtual || tab.trash) await navigate(shared.places.find((p) => p.kind === 'home')?.path || 'C:\\');
+  const t = tab;
+  deepStop(t);
+  const job = (Math.random() * 0x7fffffff) >>> 0;
+  t.deep = { query: text, job, running: true, pc: true };
+  t.filter = text;
+  els.search.value = text;
+  t.entries = [];
+  t.selected.clear();
+  t.anchor = t.focus = -1;
+  els.content.scrollTop = 0;
+  deepPaint(t, true);
+  const t0 = performance.now();
+  const r = await invoke('index_search', { query: words.join(' '), max: DEEP_MAX }).catch((e) => { toast(cleanError(e), 'error'); return null; });
+  if (t.deep?.job !== job) return;
+  if (r && !r.ready) toast('L’index de recherche n’est pas encore prêt', 'error');
+  deepAdd(t, r?.entries || []);
+  Object.assign(t.deep, { running: false, ms: Math.round(performance.now() - t0), total: r?.total || 0, truncated: (r?.total || 0) > (r?.entries.length || 0) });
+  deepPaint(t, true);
+}
+
 /** Quitte les résultats : le dossier de départ est de nouveau affiché tel quel. */
 async function deepExit(t = tab, clearField = true) {
   if (!t.deep) return;
@@ -284,7 +312,7 @@ async function deepExit(t = tab, clearField = true) {
 /** Actualisation pendant l'affichage des résultats (fichier renommé, envoyé à la Corbeille…) : F5 relance la
     recherche, sinon chaque résultat est relu (les disparus s'en vont, les renommés gardent leur place). */
 async function deepRefresh(t, force) {
-  if (force === true && t === tab) { deepSearch(t.deep.query); return true; }
+  if (force === true && t === tab) { if (t.deep.pc) deepSearchPC(t.deep.query); else deepSearch(t.deep.query); return true; }
   if (t.deep.running) return true;
   const job = t.deep.job;
   const paths = [...new Set([...t.entries.map((e) => e.path), ...t.selected])];
@@ -309,24 +337,27 @@ function renderDeepBar() {
   if (deepBar.hidden) return;
   const q = t.filter.trim();
   const where = `« ${esc(tabTitle(t))} »`;
-  const go = (text) => `<button class="deep-go" data-deep="go">${ICON_SEARCH}<span>Chercher « ${esc(text)} » dans tous les sous-dossiers de ${where}</span></button><span class="deep-kbd">Ctrl+Entrée</span>`;
+  const pc = typeof indexReady === 'function' && indexReady() ? `<button class="deep-go" data-deep="pc" title="Index de recherche rapide (Options)">${ICON_SEARCH}<span>Partout sur le PC</span></button>` : '';
+  const go = (text) => `<button class="deep-go" data-deep="go">${ICON_SEARCH}<span>Chercher « ${esc(text)} » dans tous les sous-dossiers de ${where}</span></button>${pc}<span class="deep-kbd">Ctrl+Entrée</span>`;
+  const scope = d?.pc ? 'sur tout le PC' : `dans les sous-dossiers de ${where}`;
   if (!d) { deepBar.innerHTML = go(q); return; }
   const n = t.items.length;
   const back = '<button class="btn" data-deep="exit">Revenir au dossier</button>';
   if (d.running) {
-    deepBar.innerHTML = `<span class="spinner"></span><span class="deep-text">Recherche de « ${esc(d.query)} » dans les sous-dossiers de ${where}… <b>${plural(n, 'résultat')}</b></span><span class="grow"></span><button class="btn" data-deep="stop">Arrêter</button>${back}`;
+    deepBar.innerHTML = `<span class="spinner"></span><span class="deep-text">Recherche de « ${esc(d.query)} » ${scope}… <b>${plural(n, 'résultat')}</b></span><span class="grow"></span><button class="btn" data-deep="stop">Arrêter</button>${back}`;
     return;
   }
   const secs = d.ms == null ? '' : d.ms < 1000 ? ` en ${d.ms} ms` : ` en ${(d.ms / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} s`;
   const notes = (d.truncated ? ` · limité aux ${DEEP_MAX.toLocaleString('fr-FR')} premiers` : '') + (d.cancelled ? ' · recherche arrêtée' : '');
-  deepBar.innerHTML = `${ICON_SEARCH}<span class="deep-text"><b>${plural(n, 'résultat')}</b> pour « ${esc(d.query)} » dans les sous-dossiers de ${where}` +
+  deepBar.innerHTML = `${ICON_SEARCH}<span class="deep-text"><b>${plural(n, 'résultat')}</b> pour « ${esc(d.query)} » ${scope}${d.pc && d.total > n ? ` (sur ${d.total.toLocaleString('fr-FR')})` : ''}` +
     `<small>${d.dirs != null ? ` · ${plural(d.dirs, 'dossier')} lus` : ''}${secs}${notes}</small></span><span class="grow"></span>` +
     (q && q !== d.query ? go(q) : '<button class="btn" data-deep="go">Relancer</button>') + back;
 }
 
 deepBar.addEventListener('click', (ev) => {
   const a = ev.target.closest('[data-deep]')?.dataset.deep;
-  if (a === 'go') deepSearch(tab.filter.trim() || tab.deep?.query);
+  if (a === 'go') { if (tab.deep?.pc && !tab.filter.trim()) deepSearchPC(tab.deep.query); else deepSearch(tab.filter.trim() || tab.deep?.query); }
+  else if (a === 'pc') deepSearchPC(tab.filter.trim() || tab.deep?.query);
   else if (a === 'stop') { deepStop(tab); renderDeepBar(); }
   else if (a === 'exit') deepExit();
 });

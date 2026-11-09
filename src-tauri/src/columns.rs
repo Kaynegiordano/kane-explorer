@@ -16,7 +16,12 @@ pub struct FileCols {
     pub duration: String,
     /// Texte « parameters » (Forge / A1111) ; l'interface l'analyse
     pub ai: String,
+    /// Date de prise de vue (photo : EXIF ; vidéo de téléphone : date d'encodage), ms depuis 1970 ; 0 = inconnue
+    pub taken: u64,
 }
+
+/// Fichiers dont Windows connaît la date de prise de vue (photos, vidéos de téléphone).
+const TAKEN: &[&str] = &["jpg", "jpeg", "heic", "heif", "hif", "png", "tif", "tiff", "webp", "avif", "dng", "nef", "cr2", "cr3", "arw", "orf", "rw2", "mov", "mp4", "m4v"];
 
 const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 const AI_IMAGES: &[&str] = &["png", "jpg", "jpeg", "webp"];
@@ -123,7 +128,7 @@ fn digits(s: &str) -> u32 {
     s.chars().filter(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0)
 }
 
-fn one(p: &str, want_ai: bool) -> FileCols {
+fn one(p: &str, want_ai: bool, want_taken: bool) -> FileCols {
     let mut r = FileCols { path: p.to_string(), ..Default::default() };
     let path = Path::new(p);
     let Ok(meta) = std::fs::metadata(path) else { return r };
@@ -144,6 +149,10 @@ fn one(p: &str, want_ai: bool) -> FileCols {
         }
     }
     #[cfg(windows)]
+    if want_taken && TAKEN.contains(&ext.as_str()) {
+        r.taken = crate::win::date_taken(p).unwrap_or(0);
+    }
+    #[cfg(windows)]
     if MEDIA.contains(&ext.as_str()) {
         if let Ok(props) = crate::win::media_props(p) {
             for (k, v) in props {
@@ -160,7 +169,7 @@ fn one(p: &str, want_ai: bool) -> FileCols {
 }
 
 /// Informations de colonnes pour une liste de fichiers (lues en parallèle).
-pub fn file_columns(paths: &[String], want_ai: bool) -> Vec<FileCols> {
+pub fn file_columns(paths: &[String], want_ai: bool, want_taken: bool) -> Vec<FileCols> {
     let out = Mutex::new(Vec::with_capacity(paths.len()));
     let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(6);
     let chunk = paths.len().div_ceil(workers).max(1);
@@ -169,7 +178,7 @@ pub fn file_columns(paths: &[String], want_ai: bool) -> Vec<FileCols> {
             let out = &out;
             s.spawn(move || {
                 for p in part {
-                    let r = one(p, want_ai);
+                    let r = one(p, want_ai, want_taken);
                     out.lock().unwrap().push(r);
                 }
             });

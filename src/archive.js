@@ -225,6 +225,7 @@ function topNames(archive) {
 }
 
 function blockedVirtual() {
+  if (tab?.trash) { toast('Impossible dans la Corbeille : restaurez d’abord l’élément (clic droit → Restaurer)', 'error'); return true; }
   if (!tab || !tab.virtual) return false;
   toast('Impossible dans une archive : extrayez d’abord (clic droit → Extraire)', 'error');
   return true;

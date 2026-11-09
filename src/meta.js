@@ -60,6 +60,7 @@ const metaKey = (e) => `${e.path}|${e.modified}`;
 const metaOf = (e) => metaCache.get(metaKey(e)) || null;
 const MEDIA_META_EXT = set('png jpg jpeg gif bmp webp mp4 mkv avi mov wmv webm flv m4v mp3 wav flac ogg m4a aac wma opus');
 const AI_META_EXT = set('png jpg jpeg webp');
+const TAKEN_META_EXT = set('jpg jpeg heic heif hif png tif tiff webp avif dng nef cr2 cr3 arw orf rw2 mov mp4 m4v'); // date de prise de vue
 
 function durSeconds(s) {
   if (!s) return 0;
@@ -67,28 +68,32 @@ function durSeconds(s) {
 }
 
 /** Éléments dont les métadonnées manquent ; les fichiers sans métadonnées possibles sont marqués comme lus. */
-function metaTodo(items, wantAi) {
+function metaTodo(items, wantAi, wantTaken = false) {
   const todo = [];
   for (const e of items) {
     if (e.is_dir || isCloudOnly(e)) continue;
-    if (!MEDIA_META_EXT.has(e.ext)) {
-      if (!metaCache.has(metaKey(e))) metaCache.set(metaKey(e), { aiDone: true });
+    const taken = wantTaken && TAKEN_META_EXT.has(e.ext);
+    if (!MEDIA_META_EXT.has(e.ext) && !taken) {
+      if (!metaCache.has(metaKey(e))) metaCache.set(metaKey(e), { aiDone: true, takenDone: true });
       continue;
     }
     const m = metaCache.get(metaKey(e));
-    if (!m || (wantAi && !m.aiDone && AI_META_EXT.has(e.ext))) todo.push(e);
+    if (!m || (wantAi && !m.aiDone && AI_META_EXT.has(e.ext)) || (taken && !m.takenDone)) todo.push(e);
   }
   return todo;
 }
 
-async function fetchMeta(list, wantAi) {
+async function fetchMeta(list, wantAi, wantTaken = false) {
   if (!list.length) return;
-  const res = await invoke('file_columns', { paths: list.map((e) => e.path), ai: wantAi }).catch(() => []);
+  const res = await invoke('file_columns', { paths: list.map((e) => e.path), ai: wantAi, taken: wantTaken }).catch(() => []);
   const byPath = new Map(res.map((r) => [r.path, r]));
   if (metaCache.size > 60000) metaCache.clear();
   for (const e of list) {
     const r = byPath.get(e.path) || {};
-    const m = { w: r.width || 0, h: r.height || 0, dur: r.duration || '', durS: durSeconds(r.duration), aiDone: wantAi, ai: null };
+    const prev = metaCache.get(metaKey(e)) || {};
+    // (les informations déjà lues sont gardées : IA, date de prise de vue)
+    const m = { ...prev, w: r.width || 0, h: r.height || 0, dur: r.duration || '', durS: durSeconds(r.duration), aiDone: wantAi || !!prev.aiDone, ai: wantAi ? null : prev.ai || null };
+    if (wantTaken) { m.taken = r.taken || 0; m.takenDone = true; }
     if (r.ai) {
       const p = parseParameters(r.ai);
       m.ai = Object.fromEntries(p.params);
@@ -124,15 +129,24 @@ const COLS = {
   },
   model: { label: 'Modèle IA', w: 170, meta: 2, text: aiText('Model'), cmp: (a, b) => collator.compare(aiText('Model')(a), aiText('Model')(b)) },
   seed: { label: 'Seed', w: 116, meta: 2, text: aiText('Seed'), cmp: (a, b) => (+aiText('Seed')(a) || 0) - (+aiText('Seed')(b) || 0) },
+  taken: {
+    label: 'Prise de vue', w: 128, meta: 3,
+    text: (e) => { const t = metaOf(e)?.taken; return t ? dateFmt.format(t) : ''; },
+    cmp: (a, b) => (metaOf(a)?.taken || 0) - (metaOf(b)?.taken || 0),
+  },
   prompt: { label: 'Prompt IA', w: 260, meta: 2, text: aiText('prompt'), cmp: (a, b) => collator.compare(aiText('prompt')(a), aiText('prompt')(b)) },
+  // Corbeille seulement (trash.js)
+  origin: { label: 'Emplacement d’origine', w: 220, trash: true, text: (e) => parentOf(e.origin || '') || '', cmp: (a, b) => collator.compare(a.origin || '', b.origin || '') },
+  deleted: { label: 'Supprimé le', w: 128, trash: true, text: (e) => (e.deleted ? dateFmt.format(e.deleted) : ''), cmp: (a, b) => (a.deleted || 0) - (b.deleted || 0) },
 };
+const TRASH_COLS = ['deleted', 'origin', 'size', 'type'];
 const colWidth = (k) => kColW[k] || COLS[k].w;
 
 /** Colonnes qui tiennent dans la largeur disponible (la colonne Nom garde toujours 160 px au moins). */
 function visibleColumns(width) {
   const out = [];
   let used = 160;
-  for (const k of kCols) {
+  for (const k of tab?.trash ? TRASH_COLS : kCols) {
     if (!COLS[k]) continue;
     const w = colWidth(k) + 12;
     if (used + w > width) break;
@@ -167,18 +181,19 @@ function requestVisibleMeta() {
   const need = listCols.map((k) => COLS[k]).filter((c) => c.meta);
   if (!need.length) return;
   const wantAi = need.some((c) => c.meta === 2);
+  const wantTaken = need.some((c) => c.meta === 3);
   const t = tab;
   clearTimeout(metaTimer);
   metaTimer = setTimeout(async () => {
-    const todo = metaTodo(t.items.slice(view.first, view.last), wantAi);
+    const todo = metaTodo(t.items.slice(view.first, view.last), wantAi, wantTaken);
     if (!todo.length) return;
-    await fetchMeta(todo, wantAi);
+    await fetchMeta(todo, wantAi, wantTaken);
     if (tab === t) paintMeta();
   }, 90);
 }
 
 function paintMeta() {
-  const vwin = $('vwin');
+  const vwin = paneEl('vwin');
   if (!vwin || prefs.view !== 'list') return;
   for (const el of vwin.children) {
     const e = tab.items[+el.dataset.i];
@@ -197,14 +212,15 @@ async function ensureSortMeta() {
   if (!c || !c.meta || !tab || tab.path === HOME || tab.metaScan) return;
   const t = tab;
   const wantAi = c.meta === 2;
-  const todo = metaTodo(t.items, wantAi);
+  const wantTaken = c.meta === 3;
+  const todo = metaTodo(t.items, wantAi, wantTaken);
   if (!todo.length) return;
   t.metaScan = true;
   try {
     for (let i = 0; i < todo.length; i += 120) {
       if (tab !== t || !COLS[prefs.sortKey]?.meta) break; // onglet ou tri changé : inutile de continuer
       els.count.textContent = `Lecture des métadonnées… ${Math.min(i + 120, todo.length)} / ${todo.length}`;
-      await fetchMeta(todo.slice(i, i + 120), wantAi);
+      await fetchMeta(todo.slice(i, i + 120), wantAi, wantTaken);
     }
   } finally { t.metaScan = false; }
   if (tab === t) { const top = els.content.scrollTop; render(); els.content.scrollTop = top; }
@@ -225,7 +241,7 @@ function resetColumns() {
 
 function columnsMenu(x, y) {
   showMenu(x, y, [
-    ...Object.entries(COLS).map(([k, c]) => ({ label: `${kCols.includes(k) ? '✓' : ' '} ${c.label}`, run: () => toggleColumn(k) })),
+    ...Object.entries(COLS).filter(([, c]) => !c.trash).map(([k, c]) => ({ label: `${kCols.includes(k) ? '✓' : ' '} ${c.label}`, run: () => toggleColumn(k) })),
     '-',
     { label: 'Réorganiser les colonnes…', run: openColumnsEditor },
     { label: 'Rétablir les colonnes par défaut', run: resetColumns },
@@ -233,7 +249,7 @@ function columnsMenu(x, y) {
 }
 
 function openColumnsEditor() {
-  let order = [...kCols.filter((k) => COLS[k]), ...Object.keys(COLS).filter((k) => !kCols.includes(k))];
+  let order = [...kCols.filter((k) => COLS[k] && !COLS[k].trash), ...Object.keys(COLS).filter((k) => !kCols.includes(k) && !COLS[k].trash)];
   const checked = new Set(kCols);
   const draw = () => {
     modalBox.querySelector('.col-list').innerHTML = order.map((k, i) =>

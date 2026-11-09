@@ -120,7 +120,7 @@ function afterLoad(t, isRefresh = false) {
   t.promptsRaw = null;
   t.aiFacets = null;
   t.previews = undefined; // aperçus des sous-dossiers (grille), lus à la demande : studio.js
-  if (t.path === HOME || t.virtual) { t.sub = null; if (t.virtual) { t.info = null; t.git = null; } return; }
+  if (t.path === HOME || t.virtual || t.trash) { t.sub = null; if (t.virtual || t.trash) { t.info = null; t.git = null; } return; }
   const path = t.path;
   const still = () => t.path === path;
   if (t.entries.some((e) => e.is_dir)) {
@@ -200,7 +200,8 @@ function deepWhere(e) {
   if (!tab.deep) return '';
   const par = (parentOf(e.path) || '').replace(/\\+$/, '');
   const root = tab.path.replace(/\\+$/, '');
-  const rel = par.length > root.length && par.toLowerCase().startsWith(root.toLowerCase()) ? par.slice(root.length + 1) : '';
+  const inside = par.toLowerCase() === root.toLowerCase() || par.toLowerCase().startsWith(root.toLowerCase() + '\\');
+  const rel = inside ? par.slice(root.length + 1) : par; // (recherche sur tout le PC : chemin complet)
   return `<small class="deep-where" title="${esc(par)}">${rel ? esc(rel) : 'dans ce dossier'}</small>`;
 }
 
@@ -227,7 +228,8 @@ function loadPrompts(t, silent = false) {
     t.promptsRaw = obj;
     t.aiFacets = null;
     if (t !== tab) return;
-    if (!silent || parseFilter(t.filter).mode === 'prompt') { render(); renderWindow(true); }
+    // (regroupement par seed / prompt / modèle : groups.js attend ces paramètres pour afficher ses groupes)
+    if (!silent || parseFilter(t.filter).mode === 'prompt' || ['seed', 'prompt', 'model'].includes(groupMode(t))) { const top = els.content.scrollTop; render(); els.content.scrollTop = top; renderWindow(true); }
     renderAiBar();
   }).catch(() => { t.promptsLoading = false; });
 }
@@ -368,6 +370,9 @@ function previewAction(a, e, btn) {
     case 'wallpaper': setWallpaper(e); break;
     case 'rate': ratingMenu([e.path]); break;
     case 'extract': extractVirtual([e]); break;
+    case 'restore': trashRestore([e]); break; // Corbeille (trash.js)
+    case 'nuke': trashDeleteForever([e]); break;
+    case 'origin': navigate(parentOf(e.origin) || HOME, { select: e.origin }); break;
     case 'code': openCode(e.path); break;
     case 'pin': togglePins([e]); btn.textContent = isPinned(e.path) ? 'Désépingler' : 'Épingler'; break;
     case 'od-keep': oneDriveSet([e.path], true); break;
@@ -818,6 +823,7 @@ function featureBlankMenu() {
     '-',
     { label: isPinned(p) ? 'Désépingler ce dossier' : 'Épingler ce dossier', run: () => (isPinned(p) ? unpinFolder(p) : pinFolder(p)) },
     { label: 'Visionneuse du dossier', kbd: 'Espace', disabled: !tab.items.some(isViewable), run: () => openViewer(tab.items.filter(isViewable), 0) },
+    tab.items.some((e) => e.kind === 'image') && { label: 'Vue Photos (par mois de prise de vue)', run: photoView },
     { label: 'Analyser l’espace de ce dossier', run: () => openDiskUsage(p) },
     { label: 'Rechercher les doublons ici', run: () => openDuplicates(p) },
     { label: 'Rechercher les images similaires ici', run: () => openSimilar(p) },
@@ -1240,6 +1246,7 @@ async function loadViewerInfo(e) {
 
 async function viewerTrash() {
   const e = vw.list[vw.i];
+  if (e.deleted) { toast('Déjà dans la Corbeille (clic droit → Supprimer définitivement)'); return; }
   // Libère l'image / la vidéo affichée avant de la supprimer
   const stage = viewerEl.querySelector('.vw-stage');
   stage.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); v.load(); });
@@ -2012,6 +2019,14 @@ const raiseWindow = (label, activate = false) => invoke('raise_window', { label,
 /** Étiquette près du curseur : « Déplacer vers … » / « Copier vers … ». */
 function showDropHint(x, y, dest, name) {
   if (!dest || !dragPaths.length) { dropHint.hidden = true; return; }
+  if (dest === TRASH) { // Corbeille (trash.js)
+    dropHint.innerHTML = '<b>Envoyer à la Corbeille</b><small>Ctrl+Z pour annuler</small>';
+    dropHint.classList.remove('muted');
+    dropHint.style.left = Math.min(x + 18, innerWidth - 260) + 'px';
+    dropHint.style.top = Math.min(y + 20, innerHeight - 50) + 'px';
+    dropHint.hidden = false;
+    return;
+  }
   const drive = (p) => p.slice(0, 2).toLowerCase();
   const move = dragPaths.every((p) => drive(p) === drive(dest));
   const same = move && dragPaths.every((p) => samePath(parentOf(p) || '', dest));

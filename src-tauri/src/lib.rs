@@ -23,6 +23,10 @@ mod fileops;
 mod models;
 mod pdf;
 mod search;
+mod trash;
+mod games;
+mod rules;
+mod index;
 
 #[derive(Serialize)]
 struct Entry {
@@ -819,16 +823,18 @@ async fn undo_moves(window: WebviewWindow, pairs: Vec<(String, String)>) -> Resu
 /// Hors du fil principal (un lecteur réseau lent ne fige rien), et au plus un signal toutes les 400 ms :
 /// une copie de milliers de fichiers ne noie plus l'interface sous les messages.
 #[tauri::command]
-async fn watch_dir(app: tauri::AppHandle, window: WebviewWindow, path: Option<String>) -> Result<(), String> {
+async fn watch_dir(app: tauri::AppHandle, window: WebviewWindow, path: Option<String>, slot: Option<u32>) -> Result<(), String> {
     let label = window.label().to_string();
-    blocking(move || watch_dir_sync(app, label, path)).await?
+    blocking(move || watch_dir_sync(app, label, path, slot.unwrap_or(0))).await?
 }
 
-fn watch_dir_sync(app: tauri::AppHandle, label: String, path: Option<String>) -> Result<(), String> {
+/// `slot` : 0 = dossier du panneau actif, 1 = celui de l'autre panneau (double panneau, 1.23.0).
+fn watch_dir_sync(app: tauri::AppHandle, label: String, path: Option<String>, slot: u32) -> Result<(), String> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     let state = app.state::<WatchState>();
-    let old = state.0.lock().map_err(err)?.remove(&label); // arrête l'ancienne surveillance de cette fenêtre
+    let key = if slot == 0 { label.clone() } else { format!("{label}#{slot}") };
+    let old = state.0.lock().map_err(err)?.remove(&key); // arrête l'ancienne surveillance de cette fenêtre
     drop(old); // (hors du verrou : l'arrêt d'un observateur peut prendre un instant)
     let Some(path) = path else { return Ok(()) };
     let target = path.clone();
@@ -849,7 +855,7 @@ fn watch_dir_sync(app: tauri::AppHandle, label: String, path: Option<String>) ->
     })
     .map_err(err)?;
     watcher.watch(Path::new(&path), RecursiveMode::NonRecursive).map_err(err)?;
-    state.0.lock().map_err(err)?.insert(label, watcher);
+    state.0.lock().map_err(err)?.insert(key, watcher);
     Ok(())
 }
 
@@ -1298,6 +1304,7 @@ fn virtual_place(id: &str) -> Option<(String, Option<String>)> {
         | "20D04FE0-3AEA-1069-A2D8-08002B30309D" // Ce PC
         | "031E4825-7B94-4DC3-B131-E946B44C8DD5" => HOME_ARG.to_string(), // Bibliothèques
         "E88865EA-0E1C-4E20-9AA6-EDCD0212C87C" => dirs::picture_dir()?.to_string_lossy().into_owned(), // Galerie
+        "645FF040-5081-101B-9F08-00AA002F954E" => "::trash".to_string(), // Corbeille (1.23.0 : affichée par Kane)
         _ => return None,
     };
     Some((path, None))
@@ -1493,8 +1500,8 @@ async fn scan_prompts(dir: String) -> Result<std::collections::HashMap<String, S
 }
 
 #[tauri::command]
-async fn file_columns(paths: Vec<String>, ai: bool) -> Result<Vec<columns::FileCols>, String> {
-    blocking(move || columns::file_columns(&paths, ai)).await
+async fn file_columns(paths: Vec<String>, ai: bool, taken: Option<bool>) -> Result<Vec<columns::FileCols>, String> {
+    blocking(move || columns::file_columns(&paths, ai, taken.unwrap_or(false))).await
 }
 
 #[tauri::command]
@@ -2028,6 +2035,133 @@ async fn search_tree(window: WebviewWindow, job: u32, root: String, words: Vec<S
     .await
 }
 
+/* ---------- Index de recherche instantanée (index.rs, 1.23.0) ---------- */
+
+#[derive(Serialize)]
+struct IndexStatus {
+    on: bool,
+    building: bool,
+    count: usize,
+    built_at: u64,
+    build_ms: u64,
+    pending: usize,
+}
+
+#[tauri::command]
+fn index_status() -> IndexStatus {
+    let s = index::status();
+    IndexStatus { on: s.on, building: s.building, count: s.count, built_at: s.built_at, build_ms: s.build_ms, pending: s.pending }
+}
+
+#[tauri::command]
+fn index_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    let dir = app.path().app_local_data_dir().map_err(err)?;
+    index::set(&dir, on)
+}
+
+#[derive(Serialize)]
+struct IndexHits {
+    ready: bool,
+    total: usize,
+    entries: Vec<Entry>,
+}
+
+/// Recherche dans l'index : éléments (les plus pertinents d'abord) et nombre total trouvé.
+#[tauri::command]
+async fn index_search(query: String, max: usize) -> Result<IndexHits, String> {
+    blocking(move || match index::search(&query, max.clamp(1, 20_000)) {
+        None => IndexHits { ready: false, total: 0, entries: Vec::new() },
+        Some((paths, total)) => IndexHits {
+            ready: true,
+            total,
+            entries: paths.iter().filter_map(|p| fs::symlink_metadata(p).ok().map(|m| path_entry(Path::new(p), &m))).collect(),
+        },
+    })
+    .await
+}
+
+/* ---------- Règles automatiques sur un dossier (rules.rs, 1.23.0) ---------- */
+
+#[tauri::command]
+fn rules_list() -> Vec<rules::Rule> {
+    rules::list()
+}
+
+#[tauri::command]
+fn rules_save(rules: Vec<rules::Rule>) -> Result<(), String> {
+    rules::save(rules)
+}
+
+#[tauri::command]
+async fn rules_apply_now(folder: String) -> Result<Vec<String>, String> {
+    blocking(move || rules::apply_now(&folder)).await
+}
+
+#[tauri::command]
+fn rules_log() -> Vec<String> {
+    rules::recent_log()
+}
+
+/* ---------- Classement des enregistrements par jeu (games.rs, 1.23.0) ---------- */
+
+/// (chemin, début, fin en ms) → (jeu, source) pour chaque enregistrement.
+#[tauri::command]
+async fn recording_games(app: tauri::AppHandle, items: Vec<(String, u64, u64)>) -> Result<Vec<Option<(String, String)>>, String> {
+    let dir = app.path().app_local_data_dir().map_err(err)?;
+    blocking(move || games::recording_games(&items, &dir)).await
+}
+
+/// Journal des jeux en plein écran : lit l'état, ou l'active / le désactive (désactiver l'efface).
+#[tauri::command]
+fn game_journal(app: tauri::AppHandle, on: Option<bool>) -> Result<bool, String> {
+    let dir = app.path().app_local_data_dir().map_err(err)?;
+    if let Some(on) = on {
+        games::set_journal(&dir, on)?;
+    }
+    Ok(games::journal_enabled(&dir))
+}
+
+/* ---------- Corbeille dans Kane (trash.rs, 1.23.0) ---------- */
+
+#[tauri::command]
+async fn trash_list() -> Result<Vec<trash::TrashItem>, String> {
+    blocking(|| trash::list(&drive_letters())).await
+}
+
+/// Restaure des éléments de la Corbeille (chemins `$R…`) : (chemins restaurés, erreurs).
+#[tauri::command]
+async fn trash_restore_items(paths: Vec<String>) -> Result<(Vec<String>, Vec<String>), String> {
+    blocking(move || {
+        let (mut ok, mut errors) = (Vec::new(), Vec::new());
+        for r in trash::restore(&paths) {
+            match r {
+                Ok(p) => ok.push(p),
+                Err(e) => errors.push(e),
+            }
+        }
+        trash::notify(&paths);
+        (ok, errors)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn trash_delete(paths: Vec<String>) -> Result<(usize, Vec<String>), String> {
+    blocking(move || {
+        let r = trash::delete(&paths);
+        trash::notify(&paths);
+        r
+    })
+    .await
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn trash_empty(window: WebviewWindow) -> Result<(), String> {
+    let owner = window.hwnd().map_err(err)?.0 as isize;
+    blocking(move || trash::empty(owner)).await?
+}
+
 #[tauri::command]
 fn search_cancel(job: u32) {
     search::cancel(job);
@@ -2360,6 +2494,21 @@ pub fn run() {
         .setup(|app| {
             // 7-Zip intégré (ressources) ; extractions temporaires inutilisées depuis 24 h effacées
             archive::init(app.path().resource_dir().ok());
+            // Journal des jeux (classement des enregistrements par jeu), seulement s'il a été activé
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                if games::journal_enabled(&dir) {
+                    games::start_journal(&dir);
+                }
+                // Index de recherche instantanée (facultatif)
+                if index::enabled(&dir) {
+                    index::start(&dir);
+                }
+                // Règles automatiques des dossiers : surveillance par évènements, prévient toutes les fenêtres
+                let h = app.handle().clone();
+                rules::init(&dir, Box::new(move |folder: &str, text: &str| {
+                    let _ = h.emit("rules-applied", serde_json::json!({ "folder": folder, "text": text }));
+                }));
+            }
             std::thread::spawn(|| archive::cleanup_temp(std::time::Duration::from_secs(24 * 3600)));
             let background = std::env::args().any(|a| a == "--background");
             BACKGROUND_ON.store(background || background_registered(), std::sync::atomic::Ordering::Relaxed);
@@ -2401,7 +2550,8 @@ pub fn run() {
             // Fenêtre fermée : on arrête sa surveillance de dossier
             if let tauri::WindowEvent::Destroyed = event {
                 if let Ok(mut map) = window.state::<WatchState>().0.lock() {
-                    map.remove(window.label());
+                    let prefix = format!("{}#", window.label());
+                    map.retain(|k, _| k != window.label() && !k.starts_with(&prefix));
                 }
                 if BACKGROUND_ON.load(std::sync::atomic::Ordering::Relaxed) {
                     schedule_idle(window.app_handle().clone());
@@ -2471,6 +2621,19 @@ pub fn run() {
             path_states,
             file_columns,
             trash_restore,
+            trash_list,
+            index_status,
+            index_set,
+            index_search,
+            rules_list,
+            rules_save,
+            rules_apply_now,
+            rules_log,
+            recording_games,
+            game_journal,
+            trash_restore_items,
+            trash_delete,
+            trash_empty,
             search_tree,
             search_cancel,
             entries_of,

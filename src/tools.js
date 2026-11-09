@@ -145,7 +145,11 @@ const ORGANIZE_MODES = [
   ['day', 'Par jour de modification', '2026-10-05'],
   ['type', 'Par type', 'Images, Vidéos, Documents…'],
   ['ext', 'Par extension', 'PNG, JPG, MP4…'],
+  ['game', 'Par jeu (enregistrements vidéo)', 'Elden Ring, Fortnite…'],
 ];
+
+/** Jeu de chaque enregistrement (games.rs) : chemin → nom du jeu, pour le mode « Par jeu ». */
+let organizeGames = new Map();
 
 function organizeTarget(e, mode) {
   const d = new Date(e.modified);
@@ -153,56 +157,110 @@ function organizeTarget(e, mode) {
   if (mode === 'month') return `${d.getFullYear()}-${p2(d.getMonth() + 1)}`;
   if (mode === 'day') return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
   if (mode === 'type') return TYPE_FOLDERS[e.kind] || 'Autres';
+  if (mode === 'game') return organizeGames.get(e.path)?.replace(/[\\/:*?"<>|]/g, ' ').replace(/[. ]+$/, '').trim() || null; // inconnu : reste en place
   return e.ext ? e.ext.toUpperCase() : 'Sans extension';
 }
 
-function organizeCandidates() {
+function organizeCandidates(mode) {
   const sel = selectedEntries().filter((e) => !e.is_dir);
   const list = sel.length ? sel : tab.items.filter((e) => !e.is_dir && !e.hidden);
-  return list.filter((e) => !/^(desktop\.ini|thumbs\.db)$/i.test(e.name));
+  return list.filter((e) => !/^(desktop\.ini|thumbs\.db)$/i.test(e.name) && (mode !== 'game' || e.kind === 'video'));
+}
+
+/** Début d'un enregistrement : date et heure du nom (« 2026-10-15 10-12-00.mp4 », OBS), sinon date de création. */
+function recordingStart(e) {
+  const m = e.name.match(/(\d{4})[-._ ](\d{2})[-._ ](\d{2})[ _T-]+(\d{2})[-._h](\d{2})[-._m](\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
+  return e.created || e.modified;
+}
+
+async function loadRecordingGames(files) {
+  const items = files.map((e) => [e.path, recordingStart(e), Math.max(e.modified, recordingStart(e))]);
+  const res = await invoke('recording_games', { items }).catch(() => []);
+  organizeGames = new Map();
+  files.forEach((e, i) => { if (res[i]) organizeGames.set(e.path, res[i][0]); });
 }
 
 function openOrganize() {
   if (tab.path === HOME || blockedVirtual()) return;
-  const files = organizeCandidates();
-  if (!files.length) { toast('Aucun fichier à ranger ici', 'error'); return; }
-  const chosen = selectedEntries().some((e) => !e.is_dir);
-  const scope = chosen ? `les ${plural(files.length, 'fichier')} sélectionnés` : `les ${plural(files.length, 'fichier')} de ce dossier`;
   let mode = store.get('organizeMode', 'month');
   if (!ORGANIZE_MODES.some((m) => m[0] === mode)) mode = 'month';
+  let files = organizeCandidates(mode);
+  if (!files.length && mode === 'game') { mode = 'month'; files = organizeCandidates(mode); }
+  if (!files.length) { toast('Aucun fichier à ranger ici', 'error'); return; }
+  const chosen = selectedEntries().some((e) => !e.is_dir);
+  const scopeOf = () => (chosen ? `les ${plural(files.length, 'fichier')} sélectionnés` : `les ${plural(files.length, mode === 'game' ? 'vidéo' : 'fichier')} de ce dossier`);
+  let gamesReady = false;
 
   const groups = () => {
     const map = new Map();
     for (const e of files) {
       const f = organizeTarget(e, mode);
+      if (f === null) continue;
       if (!map.has(f)) map.set(f, []);
       map.get(f).push(e);
     }
     return map;
   };
   const drawPreview = () => {
+    const go = modalBox.querySelector('[data-act="go"]');
+    const lead = modalBox.querySelector('#org-scope');
+    if (lead) lead.textContent = scopeOf();
+    if (mode === 'game' && !gamesReady) {
+      $('org-preview').innerHTML = `<div class="org-more">${SPINNER} Recherche du jeu de chaque vidéo…</div>`;
+      go.disabled = true;
+      return;
+    }
     const rows = [...groups()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
     const shown = rows.slice(0, 10).map(([name, list]) =>
       `<div class="org-row">${ICON_FOLDER}<span>${esc(name)}</span><b>${plural(list.length, 'fichier')}</b></div>`).join('');
-    $('org-preview').innerHTML = shown + (rows.length > 10 ? `<div class="org-more">… et ${rows.length - 10} autres dossiers</div>` : '');
-    modalBox.querySelector('[data-act="go"]').textContent = `Ranger dans ${plural(rows.length, 'dossier')}`;
+    const unknown = mode === 'game' ? files.filter((e) => organizeTarget(e, mode) === null).length : 0;
+    $('org-preview').innerHTML = (shown || (mode === 'game' ? '<div class="org-more">Aucun jeu reconnu.</div>' : '')) +
+      (rows.length > 10 ? `<div class="org-more">… et ${rows.length - 10} autres dossiers</div>` : '') +
+      (unknown ? `<div class="org-more">${plural(unknown, 'vidéo')} sans jeu reconnu ${unknown > 1 ? 'restent' : 'reste'} en place.</div>` : '');
+    go.textContent = `Ranger dans ${plural(rows.length, 'dossier')}`;
+    go.disabled = !rows.length;
+    const j = $('org-journal');
+    if (j) j.hidden = mode !== 'game';
+  };
+  const switchMode = async (m) => {
+    mode = m;
+    store.set('organizeMode', mode);
+    files = organizeCandidates(mode);
+    if (mode === 'game') {
+      if (!files.length) { $('org-preview').innerHTML = '<div class="org-more">Aucune vidéo ici.</div>'; modalBox.querySelector('[data-act="go"]').disabled = true; return; }
+      gamesReady = false;
+      drawPreview();
+      await loadRecordingGames(files);
+      gamesReady = true;
+      if (modal.hidden || mode !== 'game') return;
+    }
+    drawPreview();
   };
 
   openModal(`
     <h2>Ranger ce dossier</h2>
-    <p class="lead">Range ${scope} dans des sous-dossiers. Rien n’est supprimé ni remplacé, et le rangement reste annulable.</p>
+    <p class="lead">Range <span id="org-scope">${scopeOf()}</span> dans des sous-dossiers. Rien n’est supprimé ni remplacé, et le rangement reste annulable.</p>
     <fieldset><legend>Classer</legend>
       ${ORGANIZE_MODES.map(([v, label, ex]) => `<label class="opt"><input type="radio" name="org" value="${v}" ${v === mode ? 'checked' : ''}> ${label}<span class="quick-path">${ex}</span></label>`).join('')}
     </fieldset>
-    <fieldset><legend>Aperçu</legend><div id="org-preview" class="org-preview"></div></fieldset>
+    <fieldset><legend>Aperçu</legend><div id="org-preview" class="org-preview"></div>
+      <label class="opt" id="org-journal" hidden><input type="checkbox" id="org-journal-on"> Retenir les jeux lancés en plein écran, pour reconnaître les prochains enregistrements
+        <span class="quick-path">Kane note seulement le programme et l’heure, sur ce PC (ni titre de fenêtre, ni frappe) ; décocher efface ce journal</span></label>
+    </fieldset>
     <div class="foot"><span></span><div style="display:flex;gap:8px">
       <button class="btn" data-act="close">Annuler</button><button class="btn primary" data-act="go">Ranger</button></div></div>`);
-  drawPreview();
+  switchMode(mode);
+  invoke('game_journal', {}).then((on) => { const c = $('org-journal-on'); if (c) c.checked = on; }).catch(() => {});
   modalBox.onchange = (ev) => {
+    if (ev.target.id === 'org-journal-on') {
+      const on = ev.target.checked;
+      invoke('game_journal', { on }).then(() => toast(on ? 'Journal des jeux activé : les prochains enregistrements seront reconnus' : 'Journal des jeux désactivé et effacé'))
+        .catch((e) => { ev.target.checked = !on; toast(cleanError(e), 'error'); });
+      return;
+    }
     if (ev.target.name !== 'org') return;
-    mode = ev.target.value;
-    store.set('organizeMode', mode);
-    drawPreview();
+    switchMode(ev.target.value);
   };
   modalBox.onclick = async (ev) => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
@@ -210,7 +268,8 @@ function openOrganize() {
     else if (act === 'undo') { closeModal(); undoOrganize(); }
     else if (act === 'go') {
       const dir = tab.path;
-      const own = files.map((e) => [e.path, `${dir.replace(/\\+$/, '')}\\${organizeTarget(e, mode)}\\${e.name}`]);
+      const own = files.filter((e) => organizeTarget(e, mode) !== null) // (par jeu : les vidéos sans jeu reconnu restent en place)
+        .map((e) => [e.path, `${dir.replace(/\\+$/, '')}\\${organizeTarget(e, mode)}\\${e.name}`]);
       const moves = [...own, ...companionMoves(own)]; // un modèle d'IA part avec ses fichiers voisins (kaneos.js)
       modalBox.querySelector('[data-act="go"]').disabled = true;
       let res;
@@ -307,6 +366,8 @@ function toolBlankMenu() {
     '-',
     { label: 'Nouveau fichier…', run: newFile },
     { label: 'Ranger ce dossier…', disabled: !tab.items.some((e) => !e.is_dir), run: openOrganize },
+    { label: `Règles automatiques…${rulesHere().length ? ` (${rulesHere().length})` : ''}`, run: () => openRules() },
+    tab.items.some((e) => e.kind === 'video') && { label: 'Classer les vidéos par jeu…', run: () => { store.set('organizeMode', 'game'); openOrganize(); } },
     { label: undoLabel() ? `Annuler : ${undoLabel()}` : 'Annuler', kbd: 'Ctrl+Z', disabled: !undoLabel(), run: undoLast },
   ];
   if (last && samePath(last.dir, tab.path)) items.push({ label: `Annuler le dernier rangement (${plural(last.done.length, 'fichier')})`, run: undoOrganize });

@@ -10,7 +10,7 @@ dossiers). Tauri 2 : moteur Rust + interface HTML/CSS/JS sans framework (`withGl
 Installateur NSIS ~2 Mo, en français.
 
 - Dépôt public : https://github.com/Kaynegiordano/kane-explorer (branche `main`)
-- Version actuelle : **1.22.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
+- Version actuelle : **1.23.0** (voir `src-tauri/tauri.conf.json` et `src-tauri/Cargo.toml`, toujours synchronisées)
 - Dossier local : `C:\KaneOS\kane-explorer` (depuis le 07/11/2026 ; l'ancien `D:\Claude Code\kane-explorer` n'existe plus ;
   exclu du dépôt KaneOS par `C:\KaneOS\.git\info\exclude`, sans toucher à son .gitignore)
 - Installé chez l'utilisateur : `%LOCALAPPDATA%\Kane Explorer\kane-explorer.exe` (installMode currentUser)
@@ -52,6 +52,11 @@ Installateur NSIS ~2 Mo, en français.
 | `src/meta.js` | Notes en étoiles (`kRatings`), colonnes personnalisables (`COLS`, `visibleColumns`, `--cols`), cache de métadonnées |
 | `src/palette.js` | Palette Ctrl+K (`paletteResults`, `fuzzyScore`), dossiers récents (`noteVisit`), sessions d'onglets |
 | `src/undo.js` | Pile d'annulation Ctrl+Z (`pushUndo`, `undoTrash`, `undoCreate`, `undoCopies`, `undoMoves`, `recordPaste`) ; aussi dans la visionneuse, les doublons et les images similaires (1.22.0) |
+| `src/trash.js` | **Corbeille dans Kane** (1.23.0) : chemin virtuel `::trash` (`TRASH`, `tab.trash`), bandeau (restaurer la sélection / les suppressions d'aujourd'hui, vider), menus, Ctrl+R, Suppr = suppression définitive confirmée, dépôt sur « Corbeille » = envoi à la Corbeille (`trashDropped`), compteur de la barre latérale ; colonnes `origin` / `deleted` (meta.js, `TRASH_COLS`) |
+| `src/groups.js` | **Regroupement** (1.23.0) : date, type, taille, date de prise de vue, seed / prompt / modèle IA (`groupMode`, `applyGroups`, réglage par dossier `kane.groupByFolder`) ; en-têtes repliables ; rendu virtualisé à lignes de hauteurs différentes (`tab.groups` → `tab.vrows`, `buildGroupLayout`, `renderGroupedWindow`, `scrollToItemGrouped`, `lassoHitsGrouped`) ; **Vue Photos** (`photoView` : grille 192, mois de prise de vue) |
+| `src/rules.js` | **Règles automatiques** (1.23.0) : fenêtre par dossier (modèles : HEIC → JPG, archives / programmes / images / vidéos rangés, tout débloquer), pastille « ⚡ n règles », message `rules-applied` |
+| `src/index.js` | **Index de recherche rapide** (1.23.0) : case des Options, résultats « Sur le PC » dans Ctrl+K, recherche de l'accueil = palette, `deepSearchPC` (search.js) |
+| `src/dual.js` | **Double panneau** (1.23.0, chargé en dernier) : état par panneau échangé (`tabs`, `tab`, `view`, `listCols`, `els.content` : `activatePane`, `withPane`), écouteurs de #content notés par boot.js (`kaneContentListeners`) et reposés sur `#content2`, `kanePaneGuard`, Tab, Ctrl+Maj+D, F7 / F8 vers l'autre panneau (`copyMoveTo` enveloppé), `dropTargetAt` enveloppé, surveillance n° 1 (`watch_dir` `slot: 1`), onglets de droite dans `kane.dual` |
 | `src/archive.js` | Archives (1.21.0, 7-Zip) : parcourues comme des dossiers (`splitArchivePath`, `loadArchive`, `tab.virtual`, entrées `virtual:true`), cartes de progression, mot de passe, extraire ici / vers…, copier, glisser, compresser (voir « Archives : 7-Zip intégré ») |
 | `src/studio.js` | 1.6.0, chargé en dernier : barre des filtres IA (`renderAiBar`, `aiFacets`, `AI_FACETS` → recherche `p:`), images similaires (`openSimilar`), avant / après (`openSlider`, `vw.mode = 'slider'`, `vw.back` = retour à la visionneuse), mosaïque des dossiers en grille (`folderVisual`, `t.previews`) |
 | `src/actions.js` | 1.11.0, chargé en tout dernier : enveloppe `featureItemMenu`, `fileToolsMenu` et `featureBlankMenu` (réaffectation des fonctions globales). `pickFolder(title, lead)` (boîte de choix : onglets ouverts, épinglés, accès rapide, récents, lecteurs ; filtre, ↑ ↓, ou chemin collé + Entrée ; vérifié par `path_states`), `copyMoveTo` (F7 = Copier vers, F8 = Déplacer vers ; passe par `pasteWithPrompt` + `recordPaste`, donc conflits et Ctrl+Z), `compareFolders` (`compare_dirs` ; lignes cochables, Copier vers la droite / la gauche = `paste` avec `decisions: replace` groupé par dossier de destination, `make_dirs` avant ; fichiers remplacés à la Corbeille), `resizeMenu` / `resizeImages`, `makeShortcuts` (`create_shortcut`, `desktop_path`) |
@@ -67,6 +72,10 @@ Installateur NSIS ~2 Mo, en français.
 | `src-tauri/src/video.rs` | `ffmpeg_path` (PATH, sinon `<lecteur>:\KaneOS\KaneClip\bin`, `KanevasData\bin`, KaneClip installé ; mis en cache), `save_frame` (première : `-frames:v 1` ; dernière : `-sseof -3 … -fps_mode passthrough -update 1`, repli sur la vidéo entière ; instant : `-ss t`), PNG temporaire caché puis renommé |
 | `src-tauri/src/heif.rs` | HEIC / HEIF / AVIF : `open_any` (WIC via `win::wic_decode`, sinon crate `image`), `exif_from_heif` (boîtes `meta` → `iinf` item « Exif » → `iloc`, fichier ou `idat`), `exif_set_upright`, `embed_exif` (APP1 JPEG, eXIf PNG) |
 | `src-tauri/src/fsx.rs` | `trash_restore` (verbe « undelete » de Shell.Application en COM natif sur un fil STA depuis 1.21.0 ; avant : PowerShell `-ExecutionPolicy Bypass`) ; test ignoré `corbeille_aller_retour` (vraie Corbeille) |
+| `src-tauri/src/trash.rs` | Corbeille (1.23.0) : lit `X:\$Recycle.Bin\<SID>\$I…` (taille, FILETIME, chemin d'origine ; versions 1 et 2) de l'utilisateur courant (`user_sid`, jamais celles d'une ancienne installation), restaure en déplaçant `$R…` (dossier recréé, « (2) » si le nom est pris), suppression définitive, `SHEmptyRecycleBinW`, `SHChangeNotify` ; test réel ignoré `corbeille_kane` |
+| `src-tauri/src/rules.rs` | Règles automatiques (1.23.0) : `regles.json`, un observateur `notify` par dossier, fichier traité une fois complet (taille stable 1,5 s, ouvrable en écriture, extensions temporaires ignorées), ordre débloquer → JPG → ranger (un seul rangement, jamais d'écrasement) |
+| `src-tauri/src/games.rs` | Classement des vidéos par jeu (1.23.0, Ranger → Par jeu) : nom du fichier, journaux d'OBS (`game-capture` + « Writing file »), journal des jeux facultatif (`journal-jeux.txt` : programme en plein écran au premier plan, `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`, chemin du programme seulement) ; nom du jeu tiré des bibliothèques Steam / Epic / Xbox / GOG |
+| `src-tauri/src/index.rs` | Index de recherche (1.23.0, facultatif) : disques fixes, 2 à 8 fils à priorité d'E/S basse (`THREAD_MODE_BACKGROUND_BEGIN`), nœuds compacts (parent + nom), `index.kidx`, observateur récursif par disque (ajouts / suppressions à part, reconstruction après 300 000 changements ou 12 h). Mesure : 1,82 million d'éléments en 21 s (release), 54 Mo de noms, « kane » en 38 ms sur un fil |
 | `src-tauri/src/search.rs` | Recherche dans les sous-dossiers (1.22.0) : file de dossiers partagée par 2 à 8 fils, mots + extensions filtrés sur place, lots envoyés toutes les 150 ms (`search-hits`), limite 20 000, annulation par travail (`search_cancel`), jonctions jamais suivies ; commandes `search_tree`, `entries_of` (relit des résultats), `expand_path` (%VAR%, ~) dans lib.rs. Profil complet de l'utilisateur : 67 000 dossiers en 2,9 s |
 | `src-tauri/src/archive.rs` | Archives par 7-Zip intégré (1.21.0) : `list`, `extract`, `extract_temp`, `create`, `cancel`, dossiers provisoires (`staging`, `discard`, `finish_folder`), `cleanup_temp` |
 | `src-tauri/src/lib.rs` | Commandes Tauri, démarrage, plugins, protocole `thumb://`, mises à jour, registre |
@@ -85,7 +94,7 @@ Installateur NSIS ~2 Mo, en français.
 (pour que features.js soit chargé). Pour modifier main.js en masse, utiliser de petits scripts Node
 (remplacements exacts) : c'est ce qui a été fait (voir §9).
 
-Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` → `search.js` → `meta.js` → `palette.js` → `undo.js` → `archive.js` → `backup.js` → `peek.js` → `studio.js` → `actions.js` → `kaneos.js` → `radial.js`. `features.js` appelle `toolItemMenu` /
+Ordre de chargement : `boot.js` → `main.js` → `features.js` → `pins.js` → `tools.js` → `rules.js` → `search.js` → `meta.js` → `groups.js` → `palette.js` → `index.js` → `undo.js` → `trash.js` → `archive.js` → `backup.js` → `peek.js` → `studio.js` → `actions.js` → `kaneos.js` → `radial.js` → `dual.js`. `features.js` appelle `toolItemMenu` /
 `toolBlankMenu` (tools.js) et `togglePins` / `pinMany` / `unpinFolder` (pins.js) ; `main.js` appelle `quickPlaces`,
 `quickItemHtml`, `homePinnedHtml`, `pinDropped`, `shelfDropped`, `PIN_ZONE`, `SHELF_ZONE`, `openQuickEditor`.
 
@@ -365,6 +374,7 @@ Ordre de chargement : `main.js` → `features.js` → `pins.js` → `tools.js` �
 | 1.20.0 | Menu circulaire et « Convertir en » étendus : PDF en images (PNG, JPG, WebP ; un dossier si plusieurs pages), images en PDF (plusieurs images = un seul PDF), sons (MP3, M4A, Opus, FLAC, WAV) |
 | 1.21.0 | Archives refaites avec 7-Zip intégré : noms japonais / emoji / accents, mots de passe, RAR5, ISO, tar.gz, cab, volumes .001 ; progression et Annuler ; Extraire ici (intelligent) / dans « nom » / vers…, sans doublon de dossier ; Ctrl+C depuis une archive ; gros fichiers (> 512 Mo) jamais copiés dans le dossier temporaire (glisser vers un dossier de Kane, extraction à côté de l'archive), temporaire vidé après 24 h ; Compresser en ZIP ou 7z sans planter ; dates d'origine conservées ; un .iso est monté par Windows au double-clic. Corrections : « Garder les deux » sur un dossier fusionnait et dupliquait chaque fichier en « (2) » ; un rafraîchissement automatique annulait l'ouverture d'une archive ou d'un dossier lent. Moins de ressemblance avec un logiciel malveillant (fausses alertes Defender) : plus aucun PowerShell caché (Corbeille, redémarrage, liste et bascule réseau → COM, relance native, GetIfTable2, netsh), plus de lecture du clavier en boucle (RegisterHotKey actif seulement au premier plan), téléchargement du moteur IA par WinHTTP au lieu de curl.exe, commande « en administrateur » inutilisée retirée |
 | 1.22.0 | **Recherche dans tous les sous-dossiers** : bandeau « Chercher « x » dans tous les sous-dossiers », Ctrl+Entrée ou Entrée quand rien ne correspond ici ; résultats en direct avec leur dossier, ouvrables, copiables, renommables ; type:image / ext: compris par le moteur ; Échap pour revenir. **Barre d'adresse** : chemins relatifs (« Images », « .. »), %APPDATA% et autres variables, « ~ », chemin d'un fichier (ouvre son dossier et le sélectionne), adresse web (navigateur). **Ctrl+Z corrigé** : après « Ignorer » ou une fusion de dossiers, il envoyait à la Corbeille des fichiers qui étaient déjà là ; il rend maintenant la version remplacée et remet un élément déplacé sous son nom d'origine ; aussi dans la visionneuse (Corbeille), les doublons et les images similaires. Renommage en lot : un fichier verrouillé ne laisse plus de « ~kane-….tmp » et n'écrase rien ; noms vides ou interdits refusés avant d'essayer. Espace sur une vidéo de la visionneuse = pause. Le bouton « Mise à jour » demande de nouveau confirmation. « Afficher dans le dossier » répété réutilise l'onglet ouvert. « Placer un dossier dans lui-même » détecté quelle que soit la casse |
+| 1.23.0 | **Corbeille dans Kane** (barre latérale : restaurer, supprimer définitivement, vider, « restaurer les suppressions d’aujourd’hui », y déposer des éléments ; la Corbeille du Bureau s’ouvre dans Kane). **Regrouper par** date, type, taille, date de prise de vue, seed / prompt / modèle IA, en-têtes repliables ; **Vue Photos** (mois de prise de vue). **Prompt au survol** (grand aperçu : prompt, seed, modèle, étapes, CFG). **Ranger → Par jeu** (nom du fichier, journaux d’OBS, journal des jeux facultatif). **Règles automatiques** par dossier (HEIC → JPG, ranger, débloquer, à l’arrivée des fichiers). **Double panneau** (Ctrl+Maj+D, Tab, F7 / F8 vers l’autre côté, glisser de l’un à l’autre). **Index de recherche rapide** facultatif (tout le PC : Ctrl+K, recherche de l’accueil, « Partout sur le PC »). Colonne « Prise de vue ». Corrigé : boot.js levait une erreur depuis que Tauri a figé `__TAURI_INTERNALS__.invoke` (les appels refusés à la naissance d’une fenêtre n’étaient plus retentés) |
 
 **1.1.0** : sélection par rectangle ; rendu incrémental, `list_dir`
 hors du fil asynchrone, rafraîchissement ignoré si rien n'a changé ; épinglés de fichiers/lecteurs, réordonnables,
@@ -406,6 +416,10 @@ renommage en lot, miniatures, OneDrive (affichage), registre (test sur clé temp
 **Non testé à la souris** : téléchargement du moteur d'agrandissement (le PC de dev réutilise celui de KaneClip), visionneuse au clavier, survol vidéo, conversions ffmpeg (ffmpeg non installé), bascule
 réseau (couperait la connexion), aperçu d'un vrai .docx (Office absent), installateur interactif et Windows + E,
 installation d'une mise à jour depuis l'application.
+**1.23.0, non testé en réel** : journal des jeux avec un vrai jeu en plein écran (crochet testé seulement en marche /
+arrêt ; le classement l'est par test unitaire) ; glisser d'un panneau à l'autre à la souris (cible calculée testée) ;
+index tenu à jour sur plusieurs jours (observateurs récursifs) ; règles automatiques avec un vrai téléchargement de
+navigateur (fichier .crdownload renommé) ; vider la Corbeille (SHEmptyRecycleBinW, jamais lancé sur la vraie Corbeille).
 **Archives 1.21.0, non testé en réel** : RAR (aucun outil pour en créer ici ; 7-Zip les lit), vrais volumes multiples (.7z.001 +
 .002, .part1.rar), ISO de Windows en UDF, ouverture d'un .exe avec son dossier, Ctrl+C vers le presse-papiers (évité pour ne
 pas écraser celui de l'utilisateur ; `extract_temp` testé), glisser d'un petit élément vers un autre logiciel (chemin inchangé).
@@ -415,6 +429,15 @@ de configuration restent à l'Explorateur ; le module d'aperçu des polices Wind
 (repli miniature) ; pas de classement automatique des enregistrements OBS par jeu ; pas de licence dans le dépôt.
 
 ## 9. Pièges rencontrés (à connaître)
+
+- **Tauri 2 : `__TAURI_INTERNALS__.invoke`, `__TAURI__.core` et `__TAURI__.event` sont figés** (lecture seule, non
+  configurables). boot.js les remplaçait jusqu'en 1.22.0 : l'affectation levait une TypeError qui arrêtait tout boot.js
+  (visible seulement dans la console). Depuis 1.23.0 : `kaneRetry` (boot.js) enveloppe `invoke` et `listen` de main.js.
+- **Test par CDP après modification d'un .js** : WebView2 garde l'ancien fichier en cache ; `location.reload()` ne suffit
+  pas toujours. Relancer l'instance de développement, ou `Network.clearBrowserCache` + `Page.reload {ignoreCache}`.
+- **Double panneau** : jamais de `$('vbody')` / `$('vwin')` (deux éléments du même id) ; `paneEl('vbody')` cherche dans
+  `els.content`. Les variables CSS de taille (`--row-h`, `--tile-h`, `--tile-icon`) sont aussi posées sur chaque panneau.
+- **`tauri dev` s'arrête parfois après une recompilation** (le nouvel exécutable se croit seconde instance) : relancer.
 
 - **Corbeille : date de suppression à la seconde** : `System.Recycle.DateDeleted` (VT_DATE) n'a pas de millisecondes ;
   deux suppressions rapprochées (annuler une copie qui remplaçait un fichier) étaient indiscernables et `trash_restore`
