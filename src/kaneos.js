@@ -261,7 +261,7 @@ function modelHtml(e, info) {
   const baseActions = extraActions;
   extraActions = function (e) {
     let h = baseActions(e);
-    if (kanevasReady && !e.is_dir && !e.virtual && KANEVAS_EXT.has(e.ext)) h += '<button data-pv="m-kanevas" title="Ouvrir dans Kane App (Retouche)">Kane App</button>';
+    if (kanevasReady && !e.is_dir && !e.virtual && KANEVAS_EXT.has(e.ext)) h += '<button data-pv="m-kanevas" title="Ouvrir dans KaneApp (Retouche)">KaneApp</button><button data-pv="m-img2img" title="Envoyer vers le Studio IA de KaneApp : Img2Img">Img2Img</button>';
     return h;
   };
 
@@ -276,17 +276,33 @@ function modelHtml(e, info) {
       case 'm-name': copyText(modelStem(e), 'Nom du modèle copié'); break;
       case 'm-civitai': if (info?.civitai) invoke('open_path', { path: info.civitai }).catch((err) => toast(cleanError(err), 'error')); break;
       case 'm-kanevas': openInKanevas([e]); break;
+      case 'm-img2img': openInKanevas([e], 'img2img'); break;
     }
   };
 }
 
 /* ---------------- Kane App (Kanevas) ---------------- */
 
-async function openInKanevas(list) {
+const KANEAPP_STUDIO = { img2img: 'Img2Img', inpaint: 'Inpaint', extras: 'Extras (agrandir)', pnginfo: 'PNG Info' };
+
+/** Ouvre dans KaneApp ; `studio` (une seule image) : l'image arrive directement dans cet onglet du Studio IA. */
+async function openInKanevas(list, studio = null) {
   try {
-    await invoke('kanevas_open', { paths: list.map((e) => e.path) });
-    toast(list.length > 1 ? `${list.length} images envoyées à Kane App` : `« ${list[0].name} » s’ouvre dans Kane App`);
+    await invoke('kanevas_open', { paths: list.map((e) => e.path), studio });
+    toast(studio ? `« ${list[0].name} » envoyé au Studio IA de KaneApp (${KANEAPP_STUDIO[studio]})`
+      : list.length > 1 ? `${list.length} images envoyées à KaneApp` : `« ${list[0].name} » s’ouvre dans KaneApp`);
   } catch (err) { toast(cleanError(err), 'error'); }
+}
+
+function kaneAppMenu(one) {
+  return [
+    { label: 'Img2Img — transformer l’image', run: () => openInKanevas([one], 'img2img') },
+    { label: 'Inpaint — retoucher une zone', run: () => openInKanevas([one], 'inpaint') },
+    { label: 'Extras — agrandir l’image', run: () => openInKanevas([one], 'extras') },
+    AI_EXT.has(one.ext) && { label: 'PNG Info — lire les paramètres de génération', run: () => openInKanevas([one], 'pnginfo') },
+    '-',
+    { label: 'Retouche', run: () => openInKanevas([one]) },
+  ];
 }
 
 {
@@ -294,7 +310,9 @@ async function openInKanevas(list) {
   featureItemMenu = function (sel, one) {
     const items = baseItem(sel, one);
     if (kanevasReady && sel.length && sel.length <= 20 && sel.every((e) => !e.is_dir && !e.virtual && KANEVAS_EXT.has(e.ext))) {
-      items.splice(1, 0, { label: sel.length > 1 ? `Ouvrir les ${sel.length} images dans Kane App` : 'Ouvrir dans Kane App (Retouche)', run: () => openInKanevas(sel) });
+      items.splice(1, 0, sel.length > 1
+        ? { label: `Ouvrir les ${sel.length} images dans KaneApp`, run: () => openInKanevas(sel) }
+        : { label: 'Envoyer vers KaneApp', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, kaneAppMenu(sel[0])) });
     }
     return items;
   };

@@ -2303,11 +2303,15 @@ async fn kanevas_available() -> Result<bool, String> {
 /// Ouvre des images dans Kane App (espace Retouche). Kanevas n'a qu'une instance : s'il est ouvert, il les reçoit.
 #[cfg(windows)]
 #[tauri::command]
-async fn kanevas_open(paths: Vec<String>) -> Result<(), String> {
+async fn kanevas_open(paths: Vec<String>, studio: Option<String>) -> Result<(), String> {
     blocking(move || -> Result<(), String> {
-        let exe = models::kanevas_exe().ok_or("Kane App (Kanevas) n'est pas installé")?;
+        let exe = models::kanevas_exe().ok_or("KaneApp n'est pas installé")?;
         let mut cmd = std::process::Command::new(&exe);
         cmd.args(&paths);
+        // « Envoyer vers KaneApp » : onglet du Studio IA où l'image arrive (KaneApp 1.26.1 et suivants ; ignoré avant)
+        if let Some(t) = studio.filter(|t| ["img2img", "inpaint", "extras", "pnginfo"].contains(&t.as_str())) {
+            cmd.arg(format!("--kane-studio={t}"));
+        }
         if let Some(dir) = exe.parent() {
             cmd.current_dir(dir);
         }
