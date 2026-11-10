@@ -613,15 +613,6 @@ pub fn watch_explorer_windows(tx: std::sync::mpsc::Sender<isize>) {
     });
 }
 
-/// Rend à Windows la mémoire que Kane n'utilise pas (processus en arrière-plan sans fenêtre : quelques Mo seulement).
-pub fn trim_memory() {
-    use windows::Win32::System::ProcessStatus::K32EmptyWorkingSet;
-    use windows::Win32::System::Threading::GetCurrentProcess;
-    unsafe {
-        let _ = K32EmptyWorkingSet(GetCurrentProcess());
-    }
-}
-
 /// Mode « efficacité » de Windows (EcoQoS) : le processus tourne sur les cœurs économes, à priorité réduite, tant qu'aucune fenêtre n'est ouverte.
 pub fn eco_mode(on: bool) {
     use windows::Win32::System::Threading::{

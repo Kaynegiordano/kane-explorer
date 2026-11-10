@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager, State, WebviewWindow};
 
 #[cfg(windows)]
@@ -939,8 +939,15 @@ fn startup_report(app: tauri::AppHandle, window: WebviewWindow, page_start: u64,
         parts.push(format!("appels retentés {retries}"));
     }
     let line = format!("{when}  {:<6} TOTAL {:>6} ms  |  {}", if first { "1re" } else { "autre" }, d(origin, content), parts.join("  |  "));
-    let Some(path) = startup_log_path(&app) else { return };
+    append_startup_log(&app, line);
+}
+
+/// Ajoute une ligne à demarrage.log (60 dernières gardées), sur un fil à part.
+fn append_startup_log(app: &tauri::AppHandle, line: String) {
+    let Some(path) = startup_log_path(app) else { return };
     std::thread::spawn(move || {
+        static WRITE: Mutex<()> = Mutex::new(());
+        let _w = WRITE.lock();
         let mut lines: Vec<String> = fs::read_to_string(&path).map(|t| t.lines().map(String::from).collect()).unwrap_or_default();
         lines.push(line);
         let start = lines.len().saturating_sub(STARTUP_LOG_LINES);
@@ -948,6 +955,62 @@ fn startup_report(app: tauri::AppHandle, window: WebviewWindow, page_start: u64,
             let _ = fs::create_dir_all(dir);
         }
         let _ = fs::write(&path, lines[start..].join("\r\n") + "\r\n");
+    });
+}
+
+fn log_time() -> String {
+    chrono_like_now()
+}
+
+/// Date et heure locales « jj/mm/aaaa hh:mm:ss » (sans dépendance) : via l'heure locale de Windows.
+#[cfg(windows)]
+fn chrono_like_now() -> String {
+    let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    format!("{:02}/{:02}/{} {:02}:{:02}:{:02}", t.wDay, t.wMonth, t.wYear, t.wHour, t.wMinute, t.wSecond)
+}
+#[cfg(not(windows))]
+fn chrono_like_now() -> String {
+    format!("{}", now_ms() / 1000)
+}
+
+/// Incident noté par la page (blocage, affichage qui tarde, appel refusé…) : une ligne dans demarrage.log.
+#[tauri::command]
+async fn diag_note(app: tauri::AppHandle, window: WebviewWindow, text: String) {
+    let text: String = text.chars().filter(|c| !c.is_control()).take(400).collect();
+    append_startup_log(&app, format!("{}  !      {}  [{}]", log_time(), text, window.label()));
+}
+
+/// Tests seulement (version de développement) : bloque le fil principal pendant `ms` millisecondes.
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn debug_block_main(ms: u64) {
+    std::thread::sleep(Duration::from_millis(ms));
+}
+#[cfg(not(debug_assertions))]
+#[tauri::command]
+fn debug_block_main(_ms: u64) {}
+
+/// Surveillance du fil principal (fenêtres, appels synchrones) : s'il ne répond plus pendant plus de 2 s,
+/// la durée du blocage est notée dans demarrage.log quand il reprend (ou toutes les 30 s s'il reste bloqué).
+fn start_main_thread_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(1000));
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let sent = Instant::now();
+        if app.run_on_main_thread(move || { let _ = tx.send(()); }).is_err() {
+            return;
+        }
+        if rx.recv_timeout(Duration::from_millis(2000)).is_ok() {
+            continue;
+        }
+        let windows = app.webview_windows().len();
+        loop {
+            match rx.recv_timeout(Duration::from_secs(30)) {
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(_) => append_startup_log(&app, format!("{}  !      fil principal de Kane toujours bloqué ({} s, {windows} fenêtre(s))", log_time(), sent.elapsed().as_secs())),
+            }
+        }
+        append_startup_log(&app, format!("{}  !      fil principal de Kane bloqué {:.1} s ({windows} fenêtre(s))", log_time(), sent.elapsed().as_secs_f32()));
     });
 }
 
@@ -1143,11 +1206,10 @@ fn schedule_idle(app: tauri::AppHandle) {
         std::thread::sleep(std::time::Duration::from_millis(2500));
         // (une fenêtre en cours de création n'est pas encore dans la liste de Tauri)
         if app.webview_windows().is_empty() && CREATING.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            // (1.24.2 : la mémoire n'est plus vidée de force ; sous charge — génération d'images — la réouverture
+            // relisait tout depuis le fichier d'échange et la fenêtre mettait des secondes à arriver)
             #[cfg(windows)]
-            {
-                win::eco_mode(true);
-                win::trim_memory();
-            }
+            win::eco_mode(true);
         }
     });
 }
@@ -2514,6 +2576,7 @@ pub fn run() {
                 }));
             }
             std::thread::spawn(|| archive::cleanup_temp(std::time::Duration::from_secs(24 * 3600)));
+            start_main_thread_watchdog(app.handle().clone());
             let background = std::env::args().any(|a| a == "--background");
             BACKGROUND_ON.store(background || background_registered(), std::sync::atomic::Ordering::Relaxed);
             #[cfg(windows)]
@@ -2526,10 +2589,7 @@ pub fn run() {
             if background {
                 // Lancé avec Windows : aucune fenêtre, mode économe ; tout le reste démarre à la première fenêtre
                 #[cfg(windows)]
-                {
-                    win::eco_mode(true);
-                    win::trim_memory();
-                }
+                win::eco_mode(true);
             } else {
                 ensure_main_window(app.handle(), None, None)?;
             }
@@ -2565,6 +2625,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_dir,
             startup_report,
+            diag_note,
+            debug_block_main,
             startup_log,
             restart_app,
             explorer_guard,
