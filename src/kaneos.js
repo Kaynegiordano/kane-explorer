@@ -283,7 +283,7 @@ function modelHtml(e, info) {
 
 /* ---------------- Kane App (Kanevas) ---------------- */
 
-const KANEAPP_STUDIO = { img2img: 'Img2Img', inpaint: 'Inpaint', extras: 'Extras (agrandir)', pnginfo: 'PNG Info' };
+const KANEAPP_STUDIO = { img2img: 'Img2Img', inpaint: 'Inpaint', extras: 'Agrandir', pnginfo: 'PNG Info' };
 
 /** Ouvre dans KaneApp ; `studio` (une seule image) : l'image arrive directement dans cet onglet du Studio IA. */
 async function openInKanevas(list, studio = null) {
@@ -298,7 +298,7 @@ function kaneAppMenu(one) {
   return [
     { label: 'Img2Img — transformer l’image', run: () => openInKanevas([one], 'img2img') },
     { label: 'Inpaint — retoucher une zone', run: () => openInKanevas([one], 'inpaint') },
-    { label: 'Extras — agrandir l’image', run: () => openInKanevas([one], 'extras') },
+    { label: 'Agrandir — plus grande, plus nette', run: () => openInKanevas([one], 'extras') },
     AI_EXT.has(one.ext) && { label: 'PNG Info — lire les paramètres de génération', run: () => openInKanevas([one], 'pnginfo') },
     '-',
     { label: 'Retouche', run: () => openInKanevas([one]) },

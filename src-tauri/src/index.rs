@@ -253,7 +253,7 @@ pub fn enabled(dir: &Path) -> bool {
     flag(dir).exists()
 }
 
-/// Au démarrage de Kane (si activé) ou à l'activation : index du disque tout de suite, reconstruit en fond s'il est vieux.
+/// Au démarrage de Kane (si activé) ou à l'activation : index du disque tout de suite, puis refait en fond.
 pub fn start(dir: &Path) {
     if ON.swap(true, Ordering::SeqCst) {
         return;
@@ -269,13 +269,12 @@ pub fn start(dir: &Path) {
             l.index = loaded.map(Arc::new);
         }
         watch();
-        let stale = live().lock().map(|l| l.index.is_none()).unwrap_or(true) || age > Duration::from_secs(12 * 3600);
-        if stale {
-            if live().lock().map(|l| l.index.is_some()).unwrap_or(false) {
-                std::thread::sleep(Duration::from_secs(90)); // index déjà utilisable : la remise à jour attend que Windows ait fini de démarrer
-            }
-            rebuild();
+        // L'index du disque ne connaît pas ce qui a changé pendant que Kane était fermé : il sert tout de suite,
+        // puis il est toujours refait en fond (priorité basse), une fois Windows démarré.
+        if live().lock().map(|l| l.index.is_some()).unwrap_or(false) {
+            std::thread::sleep(Duration::from_secs(if age > Duration::from_secs(12 * 3600) { 90 } else { 30 }));
         }
+        rebuild();
     });
 }
 
