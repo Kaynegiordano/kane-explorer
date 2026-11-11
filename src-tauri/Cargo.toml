@@ -1,6 +1,6 @@
 [package]
 name = "kane-explorer"
-version = "1.24.2"
+version = "1.25.0"
 description = "Kane Explorer - un explorateur de fichiers simple, léger et rapide"
 edition = "2021"
 
@@ -26,6 +26,8 @@ sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"
 zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64"] }
+# Recherche d'images par description (1.25.0) : ONNX Runtime chargé à la demande (onnxruntime.dll téléchargé à l'activation)
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "directml", "api-24"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

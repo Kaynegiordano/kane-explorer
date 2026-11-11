@@ -27,6 +27,7 @@ mod trash;
 mod games;
 mod rules;
 mod index;
+mod vision;
 
 #[derive(Serialize)]
 struct Entry {
@@ -990,6 +991,29 @@ fn debug_block_main(ms: u64) {
 #[tauri::command]
 fn debug_block_main(_ms: u64) {}
 
+/// Ce que fait le fil principal en ce moment (commande de la page ou évènement de fenêtre) : nommé par la surveillance
+/// en cas de blocage (1.25.0).
+static MAIN_TASK: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
+fn main_task<T>(name: impl Into<String>, f: impl FnOnce() -> T) -> T {
+    if let Ok(mut t) = MAIN_TASK.lock() {
+        *t = Some((name.into(), Instant::now()));
+    }
+    let out = f();
+    if let Ok(mut t) = MAIN_TASK.lock() {
+        *t = None;
+    }
+    out
+}
+
+/// Toutes les commandes de la page passent ici (sur le fil principal ; les commandes « async » repartent aussitôt).
+fn tracked<R: tauri::Runtime>(h: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        let name = format!("commande {}", invoke.message.command());
+        main_task(name, || h(invoke))
+    }
+}
+
 /// Surveillance du fil principal (fenêtres, appels synchrones) : s'il ne répond plus pendant plus de 2 s,
 /// la durée du blocage est notée dans demarrage.log quand il reprend (ou toutes les 30 s s'il reste bloqué).
 fn start_main_thread_watchdog(app: tauri::AppHandle) {
@@ -1004,13 +1028,15 @@ fn start_main_thread_watchdog(app: tauri::AppHandle) {
             continue;
         }
         let windows = app.webview_windows().len();
+        // Ce que faisait le fil principal à ce moment-là (sinon : WebView2 ou Windows lui-même)
+        let doing = MAIN_TASK.lock().ok().and_then(|t| t.clone()).map(|(n, _)| format!(" pendant « {n} »")).unwrap_or_else(|| " (hors des commandes de Kane : WebView2 ou Windows)".into());
         loop {
             match rx.recv_timeout(Duration::from_secs(30)) {
                 Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(_) => append_startup_log(&app, format!("{}  !      fil principal de Kane toujours bloqué ({} s, {windows} fenêtre(s))", log_time(), sent.elapsed().as_secs())),
+                Err(_) => append_startup_log(&app, format!("{}  !      fil principal de Kane toujours bloqué ({} s, {windows} fenêtre(s)){doing}", log_time(), sent.elapsed().as_secs())),
             }
         }
-        append_startup_log(&app, format!("{}  !      fil principal de Kane bloqué {:.1} s ({windows} fenêtre(s))", log_time(), sent.elapsed().as_secs_f32()));
+        append_startup_log(&app, format!("{}  !      fil principal de Kane bloqué {:.1} s ({windows} fenêtre(s)){doing}", log_time(), sent.elapsed().as_secs_f32()));
     });
 }
 
@@ -2142,6 +2168,61 @@ async fn index_search(query: String, max: usize) -> Result<IndexHits, String> {
     .await
 }
 
+/* ---------- Recherche d'images par description (vision.rs, 1.25.0) ---------- */
+
+fn vision_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path().app_local_data_dir().map(|d| d.join("vision")).map_err(err)
+}
+
+#[tauri::command]
+fn vision_status() -> vision::Status {
+    vision::status()
+}
+
+#[tauri::command]
+async fn vision_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    let dir = vision_dir(&app)?;
+    blocking(move || vision::set(&dir, on)).await?
+}
+
+#[tauri::command]
+async fn vision_folders(folders: Vec<String>) -> Result<(), String> {
+    blocking(move || vision::set_folders(folders)).await?
+}
+
+#[derive(Serialize)]
+struct VisionHits {
+    ready: bool,
+    entries: Vec<Entry>,
+    /// Ressemblance de chaque élément de `entries` (même ordre)
+    scores: Vec<f32>,
+}
+
+fn vision_hits(found: Option<Vec<(String, f32)>>) -> VisionHits {
+    let Some(found) = found else { return VisionHits { ready: false, entries: Vec::new(), scores: Vec::new() } };
+    let mut entries = Vec::with_capacity(found.len());
+    let mut scores = Vec::with_capacity(found.len());
+    for (p, s) in found {
+        if let Ok(m) = fs::symlink_metadata(&p) {
+            entries.push(path_entry(Path::new(&p), &m));
+            scores.push(s);
+        }
+    }
+    VisionHits { ready: true, entries, scores }
+}
+
+/// Images qui correspondent à une description (« une femme aux cheveux blancs »), éventuellement dans un dossier.
+#[tauri::command]
+async fn vision_search(query: String, max: usize, within: Option<String>) -> Result<VisionHits, String> {
+    blocking(move || vision::search(&query, max.clamp(1, 5000), within.as_deref()).map(vision_hits)).await?
+}
+
+/// Images qui ressemblent à celle-ci.
+#[tauri::command]
+async fn vision_similar(path: String, max: usize) -> Result<VisionHits, String> {
+    blocking(move || vision::similar(&path, max.clamp(1, 5000)).map(vision_hits)).await?
+}
+
 /* ---------- Règles automatiques sur un dossier (rules.rs, 1.23.0) ---------- */
 
 #[tauri::command]
@@ -2569,6 +2650,10 @@ pub fn run() {
                 if index::enabled(&dir) {
                     index::start(&dir);
                 }
+                // Recherche d'images par description (facultative)
+                if vision::enabled(&dir.join("vision")) {
+                    vision::start(&dir.join("vision"));
+                }
                 // Règles automatiques des dossiers : surveillance par évènements, prévient toutes les fenêtres
                 let h = app.handle().clone();
                 rules::init(&dir, Box::new(move |folder: &str, text: &str| {
@@ -2595,7 +2680,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| main_task(format!("évènement de fenêtre {event:?}").chars().take(80).collect::<String>(), || {
             // Raccourcis de secours actifs seulement quand une fenêtre de Kane est au premier plan
             #[cfg(windows)]
             if let tauri::WindowEvent::Focused(on) = event {
@@ -2621,8 +2706,8 @@ pub fn run() {
                     schedule_idle(window.app_handle().clone());
                 }
             }
-        })
-        .invoke_handler(tauri::generate_handler![
+        }))
+        .invoke_handler(tracked(tauri::generate_handler![
             list_dir,
             startup_report,
             diag_note,
@@ -2691,6 +2776,11 @@ pub fn run() {
             index_status,
             index_set,
             index_search,
+            vision_status,
+            vision_set,
+            vision_folders,
+            vision_search,
+            vision_similar,
             rules_list,
             rules_save,
             rules_apply_now,
@@ -2745,7 +2835,7 @@ pub fn run() {
             native_preview_visible,
             native_preview_alive,
             native_preview_close
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("erreur au lancement de Kane Explorer")
         .run(|_app, event| {

@@ -755,6 +755,96 @@ pub fn thumbnail_png(path: &str, size: i32, thumb_only: bool, cache_only: bool) 
     }
 }
 
+/// Miniature Windows d'une image ou d'une vidéo, en pixels RVB (recherche par description, vision.rs).
+/// `cache_only` : seulement si Windows l'a déjà (fichiers OneDrive restés en ligne : rien n'est téléchargé).
+pub fn thumbnail_rgb(path: &str, size: i32, cache_only: bool) -> Result<(u32, u32, Vec<u8>)> {
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::*;
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&HSTRING::from(path), None)?;
+        let mut flags = SIIGBF_BIGGERSIZEOK | SIIGBF_THUMBNAILONLY;
+        if cache_only {
+            flags |= SIIGBF_INCACHEONLY;
+        }
+        let mut attempt = 0;
+        let hbmp = loop {
+            match factory.GetImage(SIZE { cx: size, cy: size }, flags) {
+                Err(e) if e.code() == windows::core::HRESULT(0x8000000A_u32 as i32) && attempt < 20 => {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                r => break r?,
+            }
+        };
+        let mut bm = BITMAP::default();
+        GetObjectW(hbmp.into(), std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut _));
+        let (w, h) = (bm.bmWidth, bm.bmHeight.abs());
+        if w <= 0 || h <= 0 {
+            let _ = DeleteObject(hbmp.into());
+            return Err(E_FAIL.into());
+        }
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w,
+                biHeight: -h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        let hdc = GetDC(None);
+        let lines = GetDIBits(hdc, hbmp, 0, h as u32, Some(buf.as_mut_ptr() as *mut _), &mut info, DIB_RGB_COLORS);
+        ReleaseDC(None, hdc);
+        let _ = DeleteObject(hbmp.into());
+        if lines == 0 {
+            return Err(E_FAIL.into());
+        }
+        // BGRA (alpha prémultiplié) -> RVB sur fond blanc
+        let has_alpha = buf.chunks_exact(4).any(|p| p[3] != 0);
+        let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+        for p in buf.chunks_exact(4) {
+            let a = if has_alpha { p[3] as u32 } else { 255 };
+            for c in [p[2], p[1], p[0]] {
+                rgb.push((c as u32 + (255 - a)).min(255) as u8);
+            }
+        }
+        Ok((w as u32, h as u32, rgb))
+    }
+}
+
+/// La fenêtre au premier plan occupe-t-elle tout son écran (jeu, vidéo en plein écran) ? Le bureau ne compte pas.
+pub fn foreground_is_fullscreen() -> bool {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetForegroundWindow, GetWindowRect};
+    unsafe {
+        let h = GetForegroundWindow();
+        if h.0.is_null() {
+            return false;
+        }
+        let mut buf = [0u16; 32];
+        let n = GetClassNameW(h, &mut buf) as usize;
+        let class = String::from_utf16_lossy(&buf[..n]);
+        if class == "Progman" || class == "WorkerW" || class == "Shell_TrayWnd" {
+            return false;
+        }
+        let mut r = RECT::default();
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        GetWindowRect(h, &mut r).is_ok()
+            && GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mut mi).as_bool()
+            && r.left <= mi.rcMonitor.left
+            && r.top <= mi.rcMonitor.top
+            && r.right >= mi.rcMonitor.right
+            && r.bottom >= mi.rcMonitor.bottom
+    }
+}
+
 unsafe fn bitmap_to_png(hbmp: windows::Win32::Graphics::Gdi::HBITMAP) -> Result<Vec<u8>> {
     use windows::Win32::Graphics::Gdi::*;
     let mut bm = BITMAP::default();
@@ -1215,6 +1305,11 @@ pub fn physical_adapters() -> Vec<(String, String, String, String)> {
 /// Télécharge une adresse https dans `dest` par WinHTTP (redirections suivies, proxy du système).
 /// Remplace en 1.21.0 un curl.exe caché (signal « téléchargeur » pour les antivirus).
 pub fn http_download(url: &str, dest: &std::path::Path) -> std::result::Result<(), String> {
+    http_download_with(url, dest, &mut |_| true)
+}
+
+/// Comme `http_download`, avec l'avancement (octets reçus) ; `progress` renvoie `false` pour abandonner.
+pub fn http_download_with(url: &str, dest: &std::path::Path, progress: &mut dyn FnMut(u64) -> bool) -> std::result::Result<(), String> {
     use std::io::Write;
     use windows::Win32::Networking::WinHttp::*;
     let rest = url.strip_prefix("https://").ok_or("Adresse non sécurisée")?;
@@ -1244,6 +1339,7 @@ pub fn http_download(url: &str, dest: &std::path::Path) -> std::result::Result<(
                 return Err(fail(&format!("réponse {status}")));
             }
             let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+            let mut got = 0u64;
             let mut buf = vec![0u8; 1 << 16];
             loop {
                 let mut avail = 0u32;
@@ -1255,6 +1351,10 @@ pub fn http_download(url: &str, dest: &std::path::Path) -> std::result::Result<(
                 let want = avail.min(buf.len() as u32);
                 WinHttpReadData(req, buf.as_mut_ptr() as *mut _, want, &mut read).map_err(|e| fail(&e.message()))?;
                 file.write_all(&buf[..read as usize]).map_err(|e| e.to_string())?;
+                got += read as u64;
+                if !progress(got) {
+                    return Err("Téléchargement annulé".into());
+                }
             }
             Ok(())
         })();

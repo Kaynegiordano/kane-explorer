@@ -621,6 +621,8 @@ function computeItems() {
   const flt = parseFilter(tab.filter);
   // isCompanionHidden (kaneos.js) : fichiers voisins d'un modèle d'IA regroupés sous lui
   const list = tab.entries.filter((e) => (prefs.showHidden || !e.hidden) && (prefs.showProtected || !e.protected) && matchFilter(e, flt) && !isCompanionHidden(e));
+  // Recherche par description (vision.js) : les images qui ressemblent le plus d'abord
+  if (tab.deep?.vision) return list.sort((a, b) => (b.score || 0) - (a.score || 0));
   const { sortKey: k, sortDir: d } = prefs;
   list.sort((a, b) => {
     if (prefs.foldersFirst && a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;

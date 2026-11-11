@@ -641,3 +641,10 @@ body.no-anim .arch-card.wait .cc-bar i { animation: none; width: 100%; opacity: 
 .pane-x { margin-left: auto; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
 .pane-x:hover { background: var(--hover); color: var(--text); }
 #dual-btn.on { background: var(--accent-soft); color: var(--accent); }
+
+/* Recherche d'images par description (vision.js) : dossiers analysés, dans les Options */
+.vision-folders { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.vision-folders .vf-title { font-size: 12px; color: var(--muted); }
+.vision-folders .vf-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.vision-folders .vf-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vision-folders > .btn { align-self: flex-start; margin-top: 2px; }
