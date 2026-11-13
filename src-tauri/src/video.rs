@@ -24,7 +24,7 @@ pub fn ffmpeg_path() -> Option<PathBuf> {
             for letter in b'C'..=b'Z' {
                 let root = PathBuf::from(format!("{}:\\KaneOS", letter as char));
                 candidates.push(root.join("KaneClip").join("bin").join("ffmpeg.exe"));
-                candidates.push(root.join("KanevasData").join("bin").join("ffmpeg.exe"));
+                candidates.push(root.join("KaneAppData").join("bin").join("ffmpeg.exe"));
             }
             if let Some(local) = dirs::data_local_dir() {
                 candidates.push(local.join("Programs").join("KaneClip").join("resources").join("bin").join("ffmpeg.exe"));

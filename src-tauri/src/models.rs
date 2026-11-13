@@ -408,20 +408,25 @@ fn strip_html(html: &str, max: usize) -> String {
 
 /* ---------------- Kane App (Kanevas) ---------------- */
 
-/// Kanevas installé (par utilisateur, installateur electron-builder) : dossier par défaut, sinon le registre.
+/// KaneApp installé (par utilisateur, installateur electron-builder) : Programs\KaneApp\KaneApp.exe depuis la 1.33,
+/// Programs\Kanevas\Kanevas.exe avant ; sinon le registre (« KaneApp 1.x » ou « Kanevas »).
 #[cfg(windows)]
 pub fn kanevas_exe() -> Option<PathBuf> {
-    let default = dirs::data_local_dir()?.join("Programs").join("Kanevas").join("Kanevas.exe");
-    if default.is_file() {
-        return Some(default);
+    let programs = dirs::data_local_dir()?.join("Programs");
+    for (dir, exe) in [("KaneApp", "KaneApp.exe"), ("Kanevas", "Kanevas.exe")] {
+        let p = programs.join(dir).join(exe);
+        if p.is_file() {
+            return Some(p);
+        }
     }
     crate::win::uninstall_entries().into_iter().find_map(|(name, uninstall)| {
-        if !name.eq_ignore_ascii_case("Kanevas") {
+        let n = name.to_ascii_lowercase();
+        if !(n == "kanevas" || n == "kaneapp" || n.starts_with("kaneapp ") || n.starts_with("kanevas ")) {
             return None;
         }
         let exe = uninstall.trim_start_matches('"').split(".exe").next()?.to_string() + ".exe";
-        let exe = Path::new(&exe).parent()?.join("Kanevas.exe");
-        exe.is_file().then_some(exe)
+        let dir = Path::new(&exe).parent()?.to_path_buf();
+        ["KaneApp.exe", "Kanevas.exe"].iter().map(|e| dir.join(e)).find(|p| p.is_file())
     })
 }
 
