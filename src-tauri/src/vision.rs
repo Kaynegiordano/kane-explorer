@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -802,7 +802,7 @@ fn save_now() {
 #[cfg(test)]
 fn save_store(path: &Path, entries: &[Entry]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
-    encode_store(&mut BufWriter::new(fs::File::create(&tmp)?), entries)?;
+    encode_store(&mut std::io::BufWriter::new(fs::File::create(&tmp)?), entries)?;
     fs::rename(tmp, path)
 }
 
