@@ -1540,6 +1540,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'F11') { viewerFullscreen(); return; }
   if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.key.toLowerCase() === 'z') { undoLast(); return; } // image envoyée à la Corbeille
   if (vw.mode === 'single' && (ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
+    if (!ev.shiftKey && textSelectionHere()) return; // texte sélectionné (prompt affiché) : copié par le moteur web (1.25.4)
     const e = vw.list[vw.i];
     if (ev.shiftKey) copyAiField(e, 'prompt'); else copyImage(e);
     return;

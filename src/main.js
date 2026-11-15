@@ -2101,6 +2101,34 @@ function typeAhead(ch) {
   }
 }
 
+/* Texte copiable hors de la liste (1.25.4) : prompt, paramètres, infos du volet, visionneuse. Ctrl+C et Ctrl+A
+   agissaient toujours sur les fichiers, même quand l'utilisateur venait de sélectionner un prompt à la souris. */
+const TEXT_BLOCKS = 'pre, .pv-ai-text, .pv-info dd, .pv-name, .pv-model-desc, .cmd, .vw-info, [data-text-block]';
+let lastTextBlock = null; // dernier bloc de texte cliqué (Ctrl+A le sélectionne en entier)
+document.addEventListener('mousedown', (ev) => { lastTextBlock = ev.target.closest?.(TEXT_BLOCKS) || null; }, true);
+
+/** Du texte est sélectionné hors de la liste des fichiers, ou le dernier clic était dans un bloc de texte. */
+function textSelectionHere() {
+  const s = getSelection();
+  if (s && !s.isCollapsed && String(s).trim()) {
+    const node = s.anchorNode?.nodeType === 1 ? s.anchorNode : s.anchorNode?.parentElement;
+    return !node?.closest('#content, #content2');
+  }
+  return !!(lastTextBlock && lastTextBlock.isConnected);
+}
+
+/** Ctrl+A dans un bloc de texte : sélectionne ce bloc seulement (pas toute la fenêtre). */
+function selectTextBlock() {
+  const s = getSelection();
+  const node = s?.anchorNode && (s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement);
+  const block = (!s?.isCollapsed && node?.closest(TEXT_BLOCKS)) || (lastTextBlock?.isConnected && lastTextBlock);
+  if (!block) return;
+  const r = document.createRange();
+  r.selectNodeContents(block);
+  s.removeAllRanges();
+  s.addRange(r);
+}
+
 document.addEventListener('keydown', (ev) => {
   const k = ev.key.toLowerCase();
   if (ev.key === 'Escape') hideMenu();
@@ -2133,6 +2161,12 @@ document.addEventListener('keydown', (ev) => {
   }
   if (ev.ctrlKey && ev.shiftKey && k === 'n') { ev.preventDefault(); doNewFolder(); return; }
   if (ev.ctrlKey && ev.shiftKey && k === 'c') { ev.preventDefault(); if (tab.selected.size) copyPaths(selectedPaths()); return; }
+  // Texte sélectionné à la souris hors de la liste (prompt du volet, infos…) : Ctrl+C copie ce texte, Ctrl+A
+  // sélectionne tout le bloc de texte, au lieu d'agir sur les fichiers (1.25.4)
+  if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && (k === 'c' || k === 'a') && textSelectionHere()) {
+    if (k === 'a') { ev.preventDefault(); selectTextBlock(); }
+    return;
+  }
   if (ev.ctrlKey) {
     const actions = {
       a: () => { tab.items.forEach((e) => tab.selected.add(e.path)); paintSelection(); },

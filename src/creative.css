@@ -611,6 +611,9 @@ body.no-anim .arch-card.wait .cc-bar i { animation: none; width: 100%; opacity: 
 #peek .peek-ai p { margin: 0 0 6px; color: var(--text); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 #peek .peek-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); }
 #peek .peek-facts b { color: var(--text); font-weight: 600; margin-right: 3px; }
+#peek .peek-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--border); color: var(--muted); }
+#peek .peek-keys kbd { display: inline-block; min-width: 16px; padding: 0 4px; margin-right: 4px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg); color: var(--text); font-family: inherit; font-size: 11px; font-weight: 600; line-height: 16px; text-align: center; }
+#peek .peek-keys em { margin-left: auto; color: var(--accent); font-style: normal; font-weight: 600; }
 
 /* Règles automatiques (rules.js, 1.23.0) */
 .rule-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }

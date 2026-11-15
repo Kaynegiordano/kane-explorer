@@ -64,7 +64,9 @@ async function peekAi(e, el) {
   const get = (k) => ai.params.find(([x]) => x === k)?.[1];
   const facts = [['Seed', get('Seed')], ['Modèle', get('Model')], ['Étapes', get('Steps')], ['CFG', get('CFG scale')], ['Taille', get('Size')]]
     .filter(([, v]) => v).map(([k, v]) => `<span><b>${k}</b> ${esc(v)}</span>`).join('');
-  el.insertAdjacentHTML('beforeend', `<div class="peek-ai">${ai.prompt ? `<p>${esc(ai.prompt)}</p>` : ''}<div class="peek-facts">${facts}</div></div>`);
+  el.insertAdjacentHTML('beforeend', `<div class="peek-ai">${ai.prompt ? `<p>${esc(ai.prompt)}</p>` : ''}<div class="peek-facts">${facts}</div>` +
+    `<div class="peek-keys"><span><kbd>C</kbd> copier le prompt</span><span><kbd>N</kbd> négatif</span><span><kbd>T</kbd> tout</span>${get('Seed') ? '<span><kbd>S</kbd> seed</span>' : ''}<em></em></div></div>`);
+  el.peekCopy = { src: e, seed: get('Seed') || '' }; // copie au clavier pendant le survol (1.25.4)
   // L'aperçu a grandi : il reste dans la fenêtre
   const h = el.offsetHeight;
   el.style.top = Math.max(8, Math.min(parseFloat(el.style.top) || 8, innerHeight - h - 8)) + 'px';
@@ -87,6 +89,33 @@ els.content.addEventListener('pointerleave', peekHide);
 els.content.addEventListener('scroll', peekHide, true);
 els.content.addEventListener('wheel', peekHide, { passive: true });
 els.content.addEventListener('pointerdown', peekHide);
-document.addEventListener('keydown', peekHide, true);
+/* Copie pendant le survol (1.25.4) : l'aperçu ne peut pas être cliqué (il suit la souris), les touches copient
+   le prompt de l'image survolée sans la sélectionner. C = prompt, N = négatif, T = tous les paramètres, S = seed. */
+const PEEK_KEYS = { c: 'prompt', n: 'negative', t: 'all', s: 'seed' };
+function peekCopyKey(ev) {
+  const info = peekEl?.peekCopy;
+  const field = PEEK_KEYS[ev.key.toLowerCase()];
+  if (!info || !field || ev.ctrlKey || ev.altKey || ev.metaKey || ev.target.closest?.('input, textarea')) return false;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  if (ev.repeat) return true;
+  const done = { prompt: 'Prompt copié', negative: 'Prompt négatif copié', all: 'Paramètres copiés', seed: 'Seed copié' }[field];
+  const mark = peekEl.querySelector('.peek-keys em');
+  (async () => {
+    let text = info.seed;
+    if (field !== 'seed') {
+      const ai = aiMeta(await invoke('image_meta', { path: info.src.path }).catch(() => []));
+      text = ai && (field === 'prompt' ? ai.prompt : field === 'negative' ? ai.negative : ai.raw);
+    }
+    if (!text) {
+      if (mark?.isConnected) mark.textContent = field === 'negative' ? 'pas de prompt négatif' : 'rien à copier';
+      return;
+    }
+    await copyText(text, done);
+    if (mark?.isConnected) mark.textContent = '✓ ' + done;
+  })();
+  return true;
+}
+document.addEventListener('keydown', (ev) => { if (!peekCopyKey(ev)) peekHide(); }, true);
 document.addEventListener('contextmenu', peekHide, true);
 window.addEventListener('blur', peekHide);
