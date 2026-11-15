@@ -33,7 +33,7 @@ function peekShow(e) {
     `<div class="peek-cap"><b>${esc(e.display || e.name)}</b><span class="peek-dim"></span><span>${esc(fmtSize(e.size))}</span></div>`;
   document.body.append(el);
   peekEl = el;
-  if (AI_EXT.has(e.ext) && !modelPreview(e)) peekAi(e, el); // image IA : prompt, seed, modèle (1.23.0)
+  if (AI_EXT.has(src.ext)) peekAi(src, el); // image IA (ou aperçu d'un modèle, 1.25.2) : prompt, seed, modèle
   const place = () => {
     if (peekEl !== el) return;
     const w = el.offsetWidth, h = el.offsetHeight;

@@ -224,7 +224,6 @@ function modelHtml(e, info) {
     ['Entraîné le', info.trained_at ? fmtDate(info.trained_at * 1000) : ''],
     ['Durée d’entraînement', fmtTrainDur(info.train_secs)],
     ['Poids conseillé', info.weight != null ? String(info.weight).replace('.', ',') : ''],
-    ['Fichiers associés', comp.map((c) => c.name).join(', ')],
   ];
   return `<section class="pv-ai pv-model">
     <div class="pv-ai-head">${esc(info.kind)} <span>${esc(info.base || '')}</span></div>
@@ -235,6 +234,9 @@ function modelHtml(e, info) {
       ${info.civitai ? '<button data-pv="m-civitai">Page Civitai</button>' : ''}
     </div>
     <dl class="pv-info">${rows.map(([k, v]) => infoRow(esc(k), v ? esc(v) : '')).join('')}</dl>
+    ${comp.length ? `<div class="pv-ai-label">Fichiers associés <span>clic = ouvrir</span></div>
+      <div class="pv-chips">${comp.map((c) => `<button class="chip" data-pv="m-comp" data-path="${esc(c.path)}" title="Ouvrir ${esc(c.name)}">${esc(c.name)}</button>`).join('')}
+      <button class="chip" data-pv="m-show" title="Afficher les fichiers associés dans la liste (ils restent liés au modèle)">Les afficher dans le dossier</button></div>` : ''}
     ${info.tags.length ? `<div class="pv-ai-label">Tags d’entraînement <span>nombre d’images · clic = copier</span></div>
       <div class="pv-chips">${info.tags.map(([t, n]) => `<button class="chip" data-pv="m-copy" data-text="${esc(t)}" title="Copier">${esc(t)}<i>${n}</i></button>`).join('')}</div>` : ''}
     ${info.description ? `<div class="pv-ai-label">Description</div><p class="pv-model-desc">${esc(info.description)}</p>` : ''}
@@ -254,8 +256,21 @@ function modelHtml(e, info) {
     if (prev && vis) vis.innerHTML = `<img src="${convertFileSrc(prev.path)}" alt="">`;
     const info = await invoke('model_info', { path: e.path }).catch(() => null);
     if (!info || token !== previewToken) return;
-    pvModel = { e, info };
+    pvModel = { e, info, prev };
     els.preview.querySelector('.pv-actions')?.insertAdjacentHTML('afterend', modelHtml(e, info));
+    // Image d'aperçu (1.25.2) : son prompt et ses paramètres, comme pour une image ouverte seule
+    if (!prev) return;
+    const ai = AI_EXT.has(prev.ext) ? aiMeta(await invoke('image_meta', { path: prev.path }).catch(() => [])) : null;
+    if (token !== previewToken) return;
+    if (ai) pvAI = ai;
+    const head = `<section class="pv-ai pv-model-prev"><div class="pv-ai-head">Image d’aperçu <span>${esc(prev.name)}</span></div>
+      <div class="pv-actions"><button data-pv="m-prev-open">Ouvrir l’image</button>
+      ${kanevasReady && ai ? '<button data-pv="m-prev-pnginfo" title="Envoyer l’image dans PNG Info de KaneApp">PNG Info</button>' : ''}
+      ${kanevasReady ? '<button data-pv="m-prev-img2img" title="Envoyer l’image vers Img2Img de KaneApp">Img2Img</button>' : ''}
+      <button data-pv="m-prev-show" title="Afficher l’image dans la liste du dossier">Afficher le fichier</button></div>
+      ${ai ? '' : '<p class="pv-model-desc">Pas de paramètres de génération dans cette image.</p>'}</section>`;
+    const sheet = els.preview.querySelector('.pv-model');
+    sheet?.insertAdjacentHTML('afterend', head + (ai ? aiHtml(ai) : ''));
   };
 
   const baseActions = extraActions;
@@ -277,8 +292,42 @@ function modelHtml(e, info) {
       case 'm-civitai': if (info?.civitai) invoke('open_path', { path: info.civitai }).catch((err) => toast(cleanError(err), 'error')); break;
       case 'm-kanevas': openInKanevas([e]); break;
       case 'm-img2img': openInKanevas([e], 'img2img'); break;
+      case 'm-comp': { const c = (modelGroups(tab).of.get(e.path) || []).find((x) => x.path === btn.dataset.path); if (c) openEntry(c); break; }
+      case 'm-show': showCompanion(null); break;
+      case 'm-prev-open': if (pvModel?.prev) openEntry(pvModel.prev); break;
+      case 'm-prev-show': if (pvModel?.prev) showCompanion(pvModel.prev); break;
+      case 'm-prev-pnginfo': if (pvModel?.prev) openInKanevas([pvModel.prev], 'pnginfo'); break;
+      case 'm-prev-img2img': if (pvModel?.prev) openInKanevas([pvModel.prev], 'img2img'); break;
     }
   };
+}
+
+/** Affiche les fichiers associés dans la liste (regroupement désactivé) et sélectionne `c` s'il est donné. */
+function showCompanion(c) {
+  setGroupModels(false);
+  if (c) setTimeout(() => selectPath(c.path), 60);
+  toast('Fichiers associés affichés : « Regrouper les fichiers des modèles » (barre d’état) les range de nouveau sous leur modèle');
+}
+
+async function copyPreviewPrompt(prev, what) {
+  const ai = aiMeta(await invoke('image_meta', { path: prev.path }).catch(() => []));
+  if (!ai) { toast('Pas de paramètres de génération dans cette image', 'error'); return; }
+  if (what === 'prompt') copyText(ai.prompt || '', 'Prompt copié');
+  else copyText(ai.raw || '', 'Paramètres copiés');
+}
+
+/** Menu « Image d'aperçu › » d'un modèle. */
+function previewImageMenu(prev) {
+  const ai = AI_EXT.has(prev.ext);
+  return [
+    { label: 'Ouvrir l’image', run: () => openEntry(prev) },
+    ai && { label: 'Copier le prompt', run: () => copyPreviewPrompt(prev, 'prompt') },
+    ai && { label: 'Copier tous les paramètres', run: () => copyPreviewPrompt(prev, 'all') },
+    kanevasReady && ai && { label: 'PNG Info dans KaneApp', run: () => openInKanevas([prev], 'pnginfo') },
+    kanevasReady && { label: 'Img2Img dans KaneApp', run: () => openInKanevas([prev], 'img2img') },
+    '-',
+    { label: 'Afficher le fichier dans le dossier', run: () => showCompanion(prev) },
+  ].filter(Boolean);
 }
 
 /* ---------------- Kane App (Kanevas) ---------------- */
@@ -309,6 +358,9 @@ function kaneAppMenu(one) {
   const baseItem = featureItemMenu;
   featureItemMenu = function (sel, one) {
     const items = baseItem(sel, one);
+    // Modèle avec image d'aperçu (1.25.2) : l'image et son prompt restent accessibles
+    const prev = sel.length === 1 && isModel(sel[0]) ? modelPreview(sel[0]) : null;
+    if (prev) items.splice(1, 0, { label: 'Image d’aperçu', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, previewImageMenu(prev)) });
     if (kanevasReady && sel.length && sel.length <= 20 && sel.every((e) => !e.is_dir && !e.virtual && KANEVAS_EXT.has(e.ext))) {
       items.splice(1, 0, sel.length > 1
         ? { label: `Ouvrir les ${sel.length} images dans KaneApp`, run: () => openInKanevas(sel) }
