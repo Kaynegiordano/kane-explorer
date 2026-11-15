@@ -704,6 +704,7 @@ fn worker() {
                     match run_vision(session.as_mut().unwrap(), pixels, ok.len()) {
                         Ok(vecs) => {
                             let mut l = live().lock().unwrap();
+                            l.error = None;
                             for (t, v) in ok.iter().zip(vecs) {
                                 let (scale, q) = quantize(&v);
                                 let e = Entry { path: t.path.clone(), mtime: t.mtime, size: t.size, scale, q };
@@ -745,9 +746,11 @@ fn worker() {
         live().lock().unwrap().phase = "pret";
         // Plus rien à faire : le modèle d'images libère la mémoire ; réveil sur changement, sinon nouvelle vérification dans 30 min
         session = None;
+        let scanned = Instant::now();
         let _ = rx.recv_timeout(Duration::from_secs(1800));
-        // Les changements arrivent en rafale (copie de 200 photos) : on laisse passer la rafale
-        std::thread::sleep(Duration::from_secs(4));
+        // Les changements arrivent en rafale (copie de 200 photos, OneDrive qui synchronise) : on laisse passer la rafale,
+        // et un dossier qui change sans arrêt n'est pas reparcouru plus d'une fois toutes les 30 s (1.25.3)
+        std::thread::sleep(Duration::from_secs(4).max(Duration::from_secs(30).saturating_sub(scanned.elapsed())));
         while rx.try_recv().is_ok() {}
     }
 }
@@ -772,21 +775,39 @@ fn quantize(v: &[f32]) -> (f32, Box<[i8]>) {
 
 /* ---------------- Enregistrement ---------------- */
 
+/// Le fichier est préparé en mémoire sous le verrou (rapide), puis écrit sans lui (1.25.3) : un disque lent ne
+/// bloque plus l'état ni les recherches pendant l'écriture (≈ 50 Mo pour 54 000 images).
 fn save_now() {
-    let mut l = live().lock().unwrap();
-    if !l.dirty || l.dir.as_os_str().is_empty() || !ON.load(Ordering::SeqCst) {
-        return;
-    }
-    let path = store_file(&l.dir);
-    if save_store(&path, &l.entries).is_ok() {
+    let (path, bytes) = {
+        let mut l = live().lock().unwrap();
+        if !l.dirty || l.dir.as_os_str().is_empty() || !ON.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut bytes = Vec::with_capacity(64 + l.entries.len() * (DIM + 128));
+        if encode_store(&mut bytes, &l.entries).is_err() {
+            return;
+        }
         l.dirty = false;
+        (store_file(&l.dir), bytes)
+    };
+    let tmp = path.with_extension("tmp");
+    if fs::write(&tmp, &bytes).and_then(|_| fs::rename(&tmp, &path)).is_err() {
+        let _ = fs::remove_file(&tmp);
+        if let Ok(mut l) = live().lock() {
+            l.dirty = true; // nouvel essai au prochain enregistrement
+        }
     }
 }
 
+#[cfg(test)]
 fn save_store(path: &Path, entries: &[Entry]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
+    encode_store(&mut BufWriter::new(fs::File::create(&tmp)?), entries)?;
+    fs::rename(tmp, path)
+}
+
+fn encode_store(w: &mut impl Write, entries: &[Entry]) -> std::io::Result<()> {
     {
-        let mut w = BufWriter::with_capacity(1 << 20, fs::File::create(&tmp)?);
         w.write_all(MAGIC)?;
         let id = MODEL_ID.as_bytes();
         w.write_all(&(id.len() as u16).to_le_bytes())?;
@@ -805,7 +826,7 @@ fn save_store(path: &Path, entries: &[Entry]) -> std::io::Result<()> {
         }
         w.flush()?;
     }
-    fs::rename(tmp, path)
+    Ok(())
 }
 
 fn load_store(path: &Path) -> (Vec<Entry>, HashMap<String, usize>) {
@@ -945,6 +966,21 @@ mod tests {
         let back: Vec<f32> = q.iter().map(|&x| x as f32 * scale).collect();
         let cos: f32 = v.iter().zip(&back).map(|(a, b)| a * b).sum::<f32>() / back.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!(cos > 0.999, "{cos}");
+    }
+
+    #[test]
+    fn enregistre_et_relit() {
+        let path = std::env::temp_dir().join(format!("kane-vision-{}.kvec", std::process::id()));
+        let v = normalized(&(0..DIM).map(|i| (i as f32).sin()).collect::<Vec<_>>());
+        let (scale, q) = quantize(&v);
+        let e = Entry { path: r"C:\Images\Été\chat.jpg".into(), mtime: 42, size: 7, scale, q };
+        save_store(&path, std::slice::from_ref(&e)).unwrap();
+        let (back, by) = load_store(&path);
+        let _ = fs::remove_file(&path);
+        assert_eq!(back.len(), 1);
+        assert_eq!(by.get(&e.path), Some(&0));
+        assert_eq!((back[0].mtime, back[0].size, back[0].scale), (42, 7, scale));
+        assert_eq!(back[0].q, e.q);
     }
 
     #[test]

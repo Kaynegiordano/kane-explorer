@@ -275,6 +275,15 @@ pub fn start(dir: &Path) {
             std::thread::sleep(Duration::from_secs(if age > Duration::from_secs(12 * 3600) { 90 } else { 30 }));
         }
         rebuild();
+        // Kane reste lancé des jours (arrière-plan) : l'observateur peut manquer des changements quand Windows en
+        // envoie trop d'un coup ; l'index est donc refait toutes les 12 h, comme annoncé (1.25.3)
+        while ON.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_secs(3600));
+            let old = live().lock().map(|l| now_ms().saturating_sub(l.built_at) > 12 * 3600 * 1000).unwrap_or(false);
+            if old && ON.load(Ordering::SeqCst) {
+                rebuild();
+            }
+        }
     });
 }
 
@@ -336,6 +345,14 @@ fn watch() {
             let Ok(ev) = res else { return };
             use notify::event::{ModifyKind, RenameMode};
             use notify::EventKind::*;
+            // Windows a perdu des changements (trop d'un coup) : index refait, au plus une fois toutes les 10 min (1.25.3)
+            if ev.need_rescan() {
+                let stale = live().lock().map(|l| !l.building && now_ms().saturating_sub(l.built_at) > 600_000).unwrap_or(false);
+                if stale {
+                    std::thread::spawn(rebuild);
+                }
+                return;
+            }
             let (add, rem) = match ev.kind {
                 Create(_) | Modify(ModifyKind::Name(RenameMode::To)) => (true, false),
                 Remove(_) | Modify(ModifyKind::Name(RenameMode::From)) => (false, true),

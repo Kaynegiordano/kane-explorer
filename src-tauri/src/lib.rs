@@ -992,18 +992,40 @@ fn debug_block_main(ms: u64) {
 fn debug_block_main(_ms: u64) {}
 
 /// Ce que fait le fil principal en ce moment (commande de la page ou évènement de fenêtre) : nommé par la surveillance
-/// en cas de blocage (1.25.0).
-static MAIN_TASK: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+/// en cas de blocage (1.25.0). Une pile (1.25.3) : pendant un glisser ou un menu Windows, la boucle de messages de
+/// Windows traite d'autres commandes, qui ne doivent pas effacer la tâche en cours.
+static MAIN_TASK: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 fn main_task<T>(name: impl Into<String>, f: impl FnOnce() -> T) -> T {
-    if let Ok(mut t) = MAIN_TASK.lock() {
-        *t = Some((name.into(), Instant::now()));
-    }
+    let depth = MAIN_TASK.lock().map(|mut t| {
+        t.push(name.into());
+        t.len()
+    });
     let out = f();
-    if let Ok(mut t) = MAIN_TASK.lock() {
-        *t = None;
+    if let (Ok(mut t), Ok(d)) = (MAIN_TASK.lock(), depth) {
+        t.truncate(d - 1);
     }
     out
+}
+
+/// Nom lisible d'une fonction Windows exécutée sur le fil principal (`on_main`), d'après le type de la fermeture.
+fn main_fn_name(type_name: &str) -> String {
+    let f = type_name.split("::").filter(|s| !s.starts_with('{') && !s.is_empty()).last().unwrap_or("?");
+    match f {
+        "start_drag" | "start_drag_inner" => "glisser des fichiers vers une autre fenêtre".into(),
+        "shell_menu" | "context_menu" => "menu Windows (Plus d'options)".into(),
+        "open_with" => "boîte « Ouvrir avec »".into(),
+        "properties" => "Propriétés de Windows".into(),
+        "native_preview_show" => "aperçu Windows d'un document (module d'aperçu)".into(),
+        f if f.starts_with("clipboard") => format!("presse-papiers ({f})"),
+        f => f.to_string(),
+    }
+}
+
+/// Fenêtres modales de Windows : elles font tourner leur propre boucle de messages (Kane reste réactif),
+/// mais retardent les signaux de la surveillance tant qu'elles sont ouvertes. Ce n'est pas un blocage.
+fn is_modal_task(name: &str) -> bool {
+    name.starts_with("glisser") || name.starts_with("menu Windows") || name.starts_with("boîte")
 }
 
 /// Toutes les commandes de la page passent ici (sur le fil principal ; les commandes « async » repartent aussitôt).
@@ -1029,7 +1051,13 @@ fn start_main_thread_watchdog(app: tauri::AppHandle) {
         }
         let windows = app.webview_windows().len();
         // Ce que faisait le fil principal à ce moment-là (sinon : WebView2 ou Windows lui-même)
-        let doing = MAIN_TASK.lock().ok().and_then(|t| t.clone()).map(|(n, _)| format!(" pendant « {n} »")).unwrap_or_else(|| " (hors des commandes de Kane : WebView2 ou Windows)".into());
+        let stack = MAIN_TASK.lock().map(|t| t.clone()).unwrap_or_default();
+        if stack.iter().any(|n| is_modal_task(n)) {
+            // Glisser ou menu Windows ouvert : Kane reste réactif, la surveillance attend sa fin sans rien noter
+            let _ = rx.recv();
+            continue;
+        }
+        let doing = stack.first().map(|n| format!(" pendant « {n} »")).unwrap_or_else(|| " (hors des commandes de Kane : WebView2 ou Windows)".into());
         loop {
             match rx.recv_timeout(Duration::from_secs(30)) {
                 Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -1525,9 +1553,12 @@ async fn on_main<R: Send + 'static>(
 ) -> Result<R, String> {
     let raw = window.hwnd().map_err(err)?.0 as isize;
     let (tx, rx) = std::sync::mpsc::channel();
+    // Nommée pour la surveillance du fil principal (1.25.3) : « kane_explorer_lib::start_drag::{{closure}} » → glisser
+    let name = main_fn_name(std::any::type_name_of_val(&f));
     window
         .run_on_main_thread(move || {
-            let _ = tx.send(f(windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void)));
+            let r = main_task(name, || f(windows::Win32::Foundation::HWND(raw as *mut std::ffi::c_void)));
+            let _ = tx.send(r);
         })
         .map_err(err)?;
     blocking(move || rx.recv().map_err(err)).await?
@@ -2136,15 +2167,16 @@ struct IndexStatus {
 }
 
 #[tauri::command]
-fn index_status() -> IndexStatus {
-    let s = index::status();
-    IndexStatus { on: s.on, building: s.building, count: s.count, built_at: s.built_at, build_ms: s.build_ms, pending: s.pending }
+async fn index_status() -> Result<IndexStatus, String> {
+    let s = blocking(index::status).await?;
+    Ok(IndexStatus { on: s.on, building: s.building, count: s.count, built_at: s.built_at, build_ms: s.build_ms, pending: s.pending })
 }
 
+/// Hors du fil principal (1.25.3) : la désactivation efface l'index sur le disque.
 #[tauri::command]
-fn index_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+async fn index_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
     let dir = app.path().app_local_data_dir().map_err(err)?;
-    index::set(&dir, on)
+    blocking(move || index::set(&dir, on)).await?
 }
 
 #[derive(Serialize)]
@@ -2174,9 +2206,10 @@ fn vision_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_local_data_dir().map(|d| d.join("vision")).map_err(err)
 }
 
+/// Hors du fil principal (1.25.3) : l'état attend le verrou de l'analyse, qui ne doit jamais figer la fenêtre.
 #[tauri::command]
-fn vision_status() -> vision::Status {
-    vision::status()
+async fn vision_status() -> Result<vision::Status, String> {
+    blocking(vision::status).await
 }
 
 #[tauri::command]
@@ -2851,6 +2884,18 @@ pub fn run() {
 #[cfg(test)]
 mod paste_tests {
     use super::*;
+
+    /// La surveillance du fil principal reconnaît un glisser même quand une commande s'exécute pendant ce temps.
+    #[test]
+    fn surveillance_glisser() {
+        let drag = |_: u8| main_task("commande list_dir", || MAIN_TASK.lock().unwrap().clone());
+        let name = main_fn_name(std::any::type_name_of_val(&drag).replace("surveillance_glisser", "start_drag").as_str());
+        assert!(is_modal_task(&name), "{name}");
+        let inside = main_task(name.clone(), || drag(0));
+        assert_eq!(inside, vec![name, "commande list_dir".to_string()]);
+        assert!(MAIN_TASK.lock().unwrap().is_empty());
+        assert_eq!(main_fn_name("kane_explorer_lib::win::clipboard_get"), "presse-papiers (clipboard_get)");
+    }
 
     /// « Garder les deux » sur un dossier déjà présent : « Projet (2) », sans rien fusionner ni dupliquer dedans.
     #[test]

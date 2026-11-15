@@ -49,7 +49,16 @@ function paintVisionFolders() {
   box.innerHTML = '<div class="vf-title">Dossiers analysés (sous-dossiers compris) :</div>' +
     (kVision.folders.length ? kVision.folders.map((f, i) => `<div class="vf-row"><span title="${esc(f)}">${esc(f)}</span><button class="btn" data-vf-del="${i}" title="Ne plus analyser ce dossier">Retirer</button></div>`).join('')
       : '<div class="vf-row"><span>Aucun dossier.</span></div>') +
-    (here && !kVision.folders.some((f) => samePath(f, here)) ? `<button class="btn" data-vf-add>Ajouter le dossier affiché : ${esc(tabTitle(tab))}</button>` : '');
+    (here && !visionCovers(here) ?`<button class="btn" data-vf-add>Ajouter le dossier affiché : ${esc(tabTitle(tab))}</button>` : '');
+}
+
+/** Ce dossier est-il déjà analysé (lui-même ou un dossier parent de la liste) ? (1.25.3) */
+function visionCovers(path) {
+  const p = path.toLowerCase();
+  return kVision.folders.some((f) => {
+    const d = f.toLowerCase().replace(/\\+$/, '');
+    return p === d || p.startsWith(d + '\\');
+  });
 }
 
 async function visionSetFolders(folders) {
@@ -180,7 +189,7 @@ const VISION_EXT = new Set('jpg jpeg jfif png webp bmp gif tif tiff heic heif hi
     const e = sel[0];
     if (!e.is_dir && VISION_EXT.has(e.ext)) {
       items.push('-', { label: 'Images du même genre (par le contenu)', run: () => deepSimilarVision(e.path) });
-    } else if (e.is_dir && !e.virtual && !kVision.folders.some((f) => samePath(f, e.path))) {
+    } else if (e.is_dir && !e.virtual && !visionCovers(e.path)) {
       items.push('-', { label: 'Analyser les images de ce dossier (recherche par description)', run: () => visionSetFolders([...kVision.folders, e.path]).then(() => toast(`« ${e.name} » ajouté : analyse en tâche de fond`)) });
     }
     return items;
