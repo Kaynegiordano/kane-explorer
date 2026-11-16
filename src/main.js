@@ -68,7 +68,7 @@ const prefs = {
   guardExplorer: store.get('guardExplorer', true),   // les fenêtres de l'Explorateur Windows ouvertes par d'autres programmes s'ouvrent dans Kane
   peek: store.get('peek', true),                      // grand aperçu au survol des images / vidéos
   radial: store.get('radial', true),                  // menu circulaire à l’appui long (radial.js)
-  openArchives: store.get('openArchives', true),     // zip, 7z, tar, rar, iso s'ouvrent comme des dossiers
+  archiver: store.get('archiver', ''),                 // logiciel d'archives (archive.js, 1.26.0) : '' = le premier installé (7-Zip d'abord)
   theme: store.get('theme', 'auto'),                 // auto | light | dark | schedule (selon l'heure)
   dayFrom: store.get('dayFrom', '07:00'),            // thème « selon l'heure » : clair à partir de…
   dayTo: store.get('dayTo', '20:00'),                // …jusqu'à (sombre le reste du temps)
@@ -77,7 +77,7 @@ const prefs = {
 };
 const DEFAULT_OPTIONS = {
   openFolders: 'same', clickMode: 'folders', updateMode: 'notify', startup: 'restore', startPath: '',
-  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, radial: true, guardExplorer: true, openArchives: true, theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
+  showExt: true, foldersFirst: true, confirmDelete: false, showHidden: false, showProtected: false, animations: true, viewerOnOpen: true, peek: true, radial: true, guardExplorer: true, archiver: '', theme: 'auto', dayFrom: '07:00', dayTo: '20:00', accent: '', density: 'comfortable',
 };
 
 /** Apparence : thème, couleur d'accent, densité des lignes. */
@@ -287,13 +287,12 @@ async function navigateLoad(path, id, { push, t, select }) {
   } else if (path !== HOME) {
     try { entries = prepare(await invoke('list_dir', { path })); }
     catch (e) {
-      // Pas un dossier : peut-être une archive (zip, 7z...) parcourue comme un dossier (archive.js)
+      // Pas un dossier : chemin d'une archive (ancien onglet, historique, dossier récent…). Depuis 1.26.0, Kane ne
+      // parcourt plus les archives : on montre l'archive dans son dossier (le double-clic l'ouvre dans 7-Zip…).
       const arch = splitArchivePath(path);
-      try {
-        if (!arch) throw e;
-        entries = prepare(await loadArchive(arch, false));
-        virtual = arch;
-      } catch (e2) { if (t === tab) toast(cleanError(arch ? e2 : e), 'error'); return false; }
+      if (arch && parentOf(arch.archive)) return navigateLoad(parentOf(arch.archive), id, { push, t, select: arch.archive });
+      if (t === tab) toast(cleanError(e), 'error');
+      return false;
     }
   }
   if (id !== t.loadId) return false; // une navigation plus récente a eu lieu
@@ -1013,7 +1012,8 @@ function displayName(e) {
 /** Ouvre un élément. Les dossiers suivent l'option « Ouvrir les dossiers ». */
 async function openEntry(e) {
   if (e.virtual) return e.is_dir ? navigate(e.path) : openVirtual(e); // élément d'une archive (archive.js)
-  if (prefs.openArchives && isBrowsableArchive(e)) return navigate(e.path); // un .iso reste monté par Windows
+  // Archives : confiées à 7-Zip, WinRAR… (1.26.0, Kane ne les ouvre plus lui-même) ; un .iso reste monté par Windows
+  if (isBrowsableArchive(e)) return openArchiveExternal(e.path);
   if (e.is_dir) {
     if (prefs.openFolders === 'tab') return newTab(e.path);
     if (prefs.openFolders === 'window') return winCall('new_window', { path: e.path });
@@ -1597,8 +1597,10 @@ els.addressInput.addEventListener('keydown', async (ev) => {
   const p = await resolveAddress(typed);
   // Chemin d'un fichier (collé depuis un message, un journal…) : son dossier s'ouvre, le fichier sélectionné
   const st = p ? (await invoke('path_states', { paths: [p] }).catch(() => [2]))[0] : 2;
-  if (st === 1 && !(prefs.openArchives && isBrowsableArchive({ is_dir: false, ext: extOf(p) }))) await navigate(parentOf(p) || HOME, { select: p });
-  else await navigate(p || HOME);
+  if (st === 1) {
+    await navigate(parentOf(p) || HOME, { select: p });
+    if (isBrowsableArchive({ is_dir: false, ext: extOf(p) })) openArchiveExternal(p); // archive tapée : ouverte dans 7-Zip…
+  } else await navigate(p || HOME);
   els.content.focus();
 });
 
@@ -2320,7 +2322,6 @@ function openOptions() {
       ${check('radial', 'Menu circulaire de conversion : appui long sur une image, une vidéo, un son ou un PDF')}
       ${check('guardExplorer', 'Remplacer aussi l’Explorateur Windows : si un programme en ouvre une fenêtre (« Afficher dans le dossier »…), elle s’ouvre dans Kane')}
       <label class="opt"><input type="checkbox" id="opt-background"> Garder Kane prêt en arrière-plan, lancé avec Windows (sans fenêtre, très léger) : l’Explorateur Windows est remplacé même quand Kane est fermé</label>
-      ${check('openArchives', 'Ouvrir les archives (zip, 7z, rar, tar.gz…) comme des dossiers (un .iso reste monté par Windows : clic droit → Parcourir le contenu)')}
       ${check('confirmDelete', 'Demander confirmation avant d\u2019envoyer à la Corbeille')}
       ${check('animations', 'Animations de l’interface')}
     </fieldset>

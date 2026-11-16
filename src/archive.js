@@ -1,6 +1,8 @@
 'use strict';
-/* Archives (zip, 7z, rar, iso, tar.gz, cab, volumes .001…) : parcourues comme des dossiers, extraites et créées
-   par 7-Zip intégré (archive.rs, 1.21.0 ; avant : tar.exe de Windows). Chargé après main.js et features.js.
+/* Archives (zip, 7z, rar, iso, tar.gz, cab, volumes .001…) : extraites et créées par 7-Zip intégré (archive.rs,
+   1.21.0 ; avant : tar.exe de Windows). Chargé après main.js et features.js. Depuis 1.26.0, elles ne sont plus
+   parcourues comme des dossiers : le double-clic les ouvre dans 7-Zip, WinRAR… (voir « Logiciels d'archives » plus bas).
+   Le code de parcours ci-dessous (loadArchive, éléments virtual) ne sert plus pour un nouvel onglet.
    - Dans l'archive (lecture seule) : Ouvrir, Copier (Ctrl+C) et Glisser extraient en temporaire
      (%TEMP%\KaneArchive, vidé après 24 h sans usage). Au-delà de BIG_ITEM, rien ne passe par le temporaire :
      ouvrir extrait à côté de l'archive, copier propose « Extraire vers… », glisser se dépose dans un dossier de Kane.
@@ -10,7 +12,7 @@
    - Chaque opération longue a sa carte de progression avec « Annuler » (évènement archive-progress). */
 
 const ARCHIVE_EXT = set('zip 7z rar tar gz tgz xz txz bz2 tbz tbz2 zst tzst lz lzma cab cbz cbr cb7 lzh lha arj wim 001 iso');
-/** Ouvert comme un dossier au double-clic (option openArchives) : un .iso est monté par Windows, comme dans l'Explorateur. */
+/** Ouvert dans le logiciel d'archives au double-clic (1.26.0) : un .iso est monté par Windows, comme dans l'Explorateur. */
 const isBrowsableArchive = (e) => !e.is_dir && ARCHIVE_EXT.has(e.ext) && e.ext !== 'iso';
 const isArchiveFile = (e) => !!e && !e.is_dir && !e.virtual && ARCHIVE_EXT.has(e.ext);
 const BIG_ITEM = 512 * 1024 * 1024;           // au-delà : jamais de copie temporaire
@@ -474,7 +476,49 @@ function virtualBlankMenu() {
   ];
 }
 
-/** Entrées du clic droit sur des fichiers d'un dossier ordinaire (tools.js) : extraire, parcourir, compresser. */
+/* ---------------- Logiciels d'archives (1.26.0) ----------------
+   À la demande de l'utilisateur, Kane n'ouvre plus les archives lui-même : le double-clic (et une archive tapée dans
+   la barre d'adresse) les confie au logiciel choisi dans les Options, sinon au premier installé (7-Zip, WinRAR,
+   NanaZip, PeaZip, Bandizip). Extraire / Compresser restent dans le clic droit (7-Zip intégré à Kane). */
+let archiversCache = null;
+async function archiversRefresh() {
+  archiversCache = await invoke('archivers_list').catch(() => archiversCache || []);
+  return archiversCache;
+}
+setTimeout(archiversRefresh, 1500);
+
+async function openArchiveExternal(path, id = prefs.archiver || null) {
+  try {
+    const name = await invoke('open_in_archiver', { path, id });
+    toast(`Ouverture dans ${name}…`);
+  } catch (err) {
+    // Aucun logiciel d'archives : on le dit, et on propose d'extraire avec Kane
+    toastAction(cleanError(err), 'Extraire ici', () => extractArchives([path], 'folder'));
+  }
+}
+
+{
+  const base = openOptions;
+  openOptions = function () {
+    base();
+    const foot = modalBox.querySelector('.foot');
+    if (!foot) return;
+    foot.insertAdjacentHTML('beforebegin', `<fieldset id="opt-archiver"><legend>Archives (zip, 7z, rar, tar.gz…)</legend>
+      <p class="lead">Recherche des logiciels d’archives installés…</p></fieldset>`);
+    archiversRefresh().then((list) => {
+      const box = modalBox.querySelector('#opt-archiver');
+      if (!box) return;
+      const cur = list.some((a) => a.id === prefs.archiver) ? prefs.archiver : '';
+      const radio = (value, label) => `<label class="opt"><input type="radio" name="archiver" value="${value}" ${cur === value ? 'checked' : ''}> ${label}</label>`;
+      box.innerHTML = '<legend>Archives (zip, 7z, rar, tar.gz…)</legend>' + (list.length
+        ? `<p class="lead">Un double-clic ouvre l’archive avec :</p>${radio('', `Automatique (${esc(list[0].name)})`)}${list.map((a) => radio(a.id, esc(a.name))).join('')}
+           <p class="lead">Extraire et Compresser restent dans le clic droit. Un .iso est monté par Windows.</p>`
+        : '<p class="lead">Aucun logiciel d’archives installé (7-Zip, WinRAR, NanaZip, PeaZip, Bandizip) : un double-clic proposera d’extraire l’archive. Installez 7-Zip (gratuit) pour les ouvrir.</p>');
+    });
+  };
+}
+
+/** Entrées du clic droit sur des fichiers d'un dossier ordinaire (tools.js) : ouvrir avec, extraire, compresser. */
 function archiveFileMenu(sel) {
   const items = [];
   const archives = sel.filter(isArchiveFile);
@@ -484,7 +528,12 @@ function archiveFileMenu(sel) {
     items.push({ label: one ? 'Extraire ici' : `Extraire ici (${archives.length} archives)`, run: () => extractArchives(paths, 'here') });
     if (one) items.push({ label: `Extraire dans « ${archiveStem(one.path)} »`, run: () => extractArchives(paths, 'folder') });
     items.push({ label: 'Extraire vers…', run: () => extractArchivesPick(paths) });
-    if (one && (one.ext === 'iso' || !prefs.openArchives)) items.push({ label: 'Parcourir le contenu', run: () => navigate(one.path) });
+    // Ouvrir dans un logiciel d'archives installé (1.26.0) : un seul = une entrée, plusieurs = un sous-menu
+    if (one && archiversCache?.length) {
+      const name = (a) => `Ouvrir avec ${a.name}`;
+      if (archiversCache.length === 1) items.unshift({ label: name(archiversCache[0]), run: () => openArchiveExternal(one.path, archiversCache[0].id) }, '-');
+      else items.unshift({ label: 'Ouvrir avec', kbd: '›', run: () => showMenu(menuPos.x + 6, menuPos.y + 6, archiversCache.map((a) => ({ label: a.name, run: () => openArchiveExternal(one.path, a.id) }))) }, '-');
+    }
   }
   items.push({ label: 'Compresser en ZIP', run: () => compressSelection(sel, 'zip') });
   items.push({ label: 'Compresser en 7z', run: () => compressSelection(sel, '7z') });

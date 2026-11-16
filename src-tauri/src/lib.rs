@@ -28,6 +28,7 @@ mod games;
 mod rules;
 mod index;
 mod vision;
+mod archivers;
 
 #[derive(Serialize)]
 struct Entry {
@@ -382,6 +383,18 @@ async fn drives() -> Vec<Drive> {
     })
     .await
     .unwrap_or_default()
+}
+
+/// Logiciels d'archives installés (7-Zip, WinRAR, NanaZip, PeaZip, Bandizip), 7-Zip d'abord (1.26.0).
+#[tauri::command]
+async fn archivers_list() -> Result<Vec<archivers::Archiver>, String> {
+    blocking(archivers::list).await
+}
+
+/// Ouvre une archive dans le logiciel d'archives choisi (`id`) ou le premier trouvé ; renvoie son nom.
+#[tauri::command]
+async fn open_in_archiver(path: String, id: Option<String>) -> Result<String, String> {
+    blocking(move || archivers::open(&path, id.as_deref())).await?
 }
 
 /// Ouvre un fichier avec son application par défaut.
@@ -2844,6 +2857,8 @@ pub fn run() {
             places,
             drives,
             open_path,
+            archivers_list,
+            open_in_archiver,
             reveal_path,
             open_terminal,
             rename_entry,
