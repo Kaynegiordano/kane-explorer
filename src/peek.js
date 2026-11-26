@@ -73,7 +73,9 @@ async function peekAi(e, el) {
 }
 
 els.content.addEventListener('pointermove', (ev) => {
-  if (!prefs.peek || tab.path === HOME || ev.buttons) { peekHide(); return; }
+  // `tab` est encore vide pendant les premières millisecondes (souris déjà sur la fenêtre au démarrage) : erreur
+  // « reading 'path' » notée 6 fois dans demarrage.log entre le 19 et le 25/11 (1.26.1)
+  if (!prefs.peek || !tab || tab.path === HOME || ev.buttons) { peekHide(); return; }
   const it = ev.target.closest('.item');
   const e = it ? tab.items[+it.dataset.i] : null;
   if (!peekEligible(e)) { peekHide(); return; }

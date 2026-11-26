@@ -1202,6 +1202,33 @@ pub fn wait_process_exit(pid: u32, ms: u32) {
     }
 }
 
+/// Instance unique sans faille (1.26.1). Le module de Tauri laisse tourner un second Kane quand le premier a déjà
+/// son verrou mais pas encore sa fenêtre de réception (`<id>-sic`) : au démarrage de Windows, deux lancements
+/// rapprochés donnaient deux Kane qui se partageaient WebView2, et une fenêtre restait vide (26/11). Appelé tout
+/// au début : le premier Kane prend ce verrou ; un suivant attend (15 s au plus) que la fenêtre de réception du
+/// premier existe, puis le module de Tauri lui transmet la demande et le ferme comme d'habitude.
+pub fn single_instance_gate(id: &str) {
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::CreateMutexW;
+    unsafe {
+        let name = HSTRING::from(format!("{id}-kane-gate"));
+        let Ok(handle) = CreateMutexW(None, false, &name) else { return };
+        if GetLastError() != ERROR_ALREADY_EXISTS {
+            let _ = handle; // jamais fermé : gardé jusqu'à la fin du processus
+            return;
+        }
+        let _ = windows::Win32::Foundation::CloseHandle(handle);
+        let (class, title) = (HSTRING::from(format!("{id}-sic")), HSTRING::from(format!("{id}-siw")));
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < std::time::Duration::from_secs(15) {
+            if FindWindowW(&class, &title).is_ok_and(|h| !h.is_invalid()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    }
+}
+
 /// Raccourcis de secours (Ctrl+Maj+F5 recharger, Ctrl+Maj+F12 redémarrer), même si la page est figée.
 /// Fil dédié avec `RegisterHotKey`, actif seulement tant qu'une fenêtre de Kane est au premier plan
 /// (`hotkeys_active`) : aucun raccourci pris aux autres logiciels, et plus de lecture du clavier en boucle

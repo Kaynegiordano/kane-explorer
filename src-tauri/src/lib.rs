@@ -1125,6 +1125,14 @@ fn ensure_main_window(app: &tauri::AppHandle, launch: Option<String>, select: Op
         }
         return Ok(());
     }
+    // Une seule création à la fois (1.26.1). Le 26/11, Kane lancé pendant qu'une fenêtre de l'Explorateur s'ouvrait
+    // (gardien, second lancement) a créé DEUX fenêtres « main » dans la même seconde : Tauri ne savait plus à laquelle
+    // répondre, les appels d'une des deux étaient refusés sans fin (fenêtre vide, « drives met du temps à répondre »).
+    // Celui qui arrive pendant une création laisse faire l'autre (show_path attend puis ouvre une fenêtre à part).
+    let Some(_claim) = MainClaim::take() else { return Ok(()) };
+    if app.get_webview_window("main").is_some() {
+        return Ok(());
+    }
     if let Some(p) = launch.filter(|p| p != HOME_ARG) {
         if let Ok(mut l) = app.state::<LaunchPath>().0.lock() {
             *l = Some(p);
@@ -1139,8 +1147,31 @@ fn ensure_main_window(app: &tauri::AppHandle, launch: Option<String>, select: Op
     Ok(())
 }
 
+/// Fenêtre principale en cours de création (1.26.1) : réservée par `ensure_main_window`, libérée à la fin (même en cas d'échec).
+static MAIN_CREATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+struct MainClaim;
+impl MainClaim {
+    fn take() -> Option<MainClaim> {
+        use std::sync::atomic::Ordering;
+        MAIN_CREATING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).ok().map(|_| MainClaim)
+    }
+}
+impl Drop for MainClaim {
+    fn drop(&mut self) {
+        MAIN_CREATING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Un autre Kane (ou un programme) demande un dossier : nouvelle fenêtre si Kane en a déjà une, sinon la fenêtre principale.
+/// Toujours appelé depuis un fil à part (second lancement, gardien de l'Explorateur) : les demandes passent une par une,
+/// et attendent la fin d'une création de fenêtre en cours (démarrage) avant de décider (1.26.1).
 fn show_path(app: &tauri::AppHandle, path: &str, select: Option<&str>) {
+    static GATE: Mutex<()> = Mutex::new(());
+    let _gate = GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let t0 = Instant::now();
+    while (MAIN_CREATING.load(std::sync::atomic::Ordering::SeqCst) || CREATING.load(std::sync::atomic::Ordering::SeqCst) > 0) && t0.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(30));
+    }
     if app.get_webview_window("main").is_some() || !app.webview_windows().is_empty() {
         let _ = open_window_select(app, path, select);
     } else {
@@ -2665,6 +2696,10 @@ pub fn run() {
     if let Some(pid) = args.iter().find_map(|a| a.strip_prefix(RELAUNCH_ARG)).and_then(|p| p.parse::<u32>().ok()) {
         win::wait_process_exit(pid, 10_000);
     }
+    let context = tauri::generate_context!();
+    // Deux lancements simultanés (démarrage de Windows, Windows + E, gardien) : un seul Kane, toujours (1.26.1)
+    #[cfg(windows)]
+    win::single_instance_gate(&context.config().identifier);
     tauri::Builder::default()
         // Une seule instance : un nouveau lancement (Windows + E, dossier ouvert ailleurs)
         // ouvre une nouvelle fenêtre dans le Kane déjà lancé, comme l'Explorateur.
@@ -2884,7 +2919,7 @@ pub fn run() {
             native_preview_alive,
             native_preview_close
         ]))
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("erreur au lancement de Kane Explorer")
         .run(|_app, event| {
             // Mode arrière-plan : fermer la dernière fenêtre ne ferme pas Kane (il reste prêt à remplacer l'Explorateur)
